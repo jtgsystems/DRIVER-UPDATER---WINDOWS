@@ -245,9 +245,9 @@ function Install-DriverUpdates {
 }
 
 # ---------------------------
-# Function: Upgrade-InstalledApplications
+# Function: Update-InstalledApplications
 # ---------------------------
-function Upgrade-InstalledApplications {
+function Update-InstalledApplications {
   Write-Log "Starting application upgrades using winget..." -Severity 'Info'
   if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     Write-Log "winget is not installed or not available in PATH. Attempting to install..." -Severity 'Info'
@@ -280,23 +280,40 @@ function Upgrade-InstalledApplications {
 }
 
 # ---------------------------
-# Function: Ensure-Administrator
+# Function: Confirm-Administrator
 # ---------------------------
-function Ensure-Administrator {
-  if (-Not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')) {
-    Write-Log "Restarting script with elevated privileges." -Severity 'Info'
+function Confirm-Administrator {
+  # Check if running as administrator
+  $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')
+  
+  if (-Not $isAdmin) {
+    Write-Log "Script is not running with administrator privileges. Attempting to elevate..." -Severity 'Info'
+    
     try {
-      Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -Wait
-      Write-Log "Script restarted with elevated privileges." -Severity 'Info'
+      # Get the current script's full path
+      $scriptPath = $PSCommandPath
+      if (-not $scriptPath) {
+        $scriptPath = $MyInvocation.MyCommand.Definition
+      }
+      
+      # Start a new elevated PowerShell process
+      $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+      Write-Log "Launching elevated process with arguments: $arguments" -Severity 'Debug'
+      
+      Start-Process PowerShell -ArgumentList $arguments -Verb RunAs -Wait
+      
+      # Exit this non-elevated instance
+      Write-Log "Exiting non-elevated instance." -Severity 'Info'
       Exit
     }
     catch {
       Write-Log "Failed to restart script with elevated privileges: $($_.Exception.Message)" -Severity 'Error'
-      throw
+      throw "Administrator privileges required. Please run this script as an Administrator."
     }
   }
   else {
     Write-Log "Script is running with administrator privileges." -Severity 'Info'
+    return $true
   }
 }
 
@@ -310,7 +327,7 @@ function Write-CompletionLog {
       CompletionTime   = Get-Date
       UpdatesInstalled = $true
       RebootRequired   = Test-PendingReboot
-      PendingUpdates   = Check-PendingUpdates
+      PendingUpdates   = Get-PendingUpdates
     }
 
     $summaryText = @"
@@ -336,6 +353,9 @@ Pending Updates   : $($summary.PendingUpdates)
 # ---------------------------
 function Test-PendingReboot {
   try {
+    # Initialize rebootPending to false
+    $rebootPending = $false
+    
     # Check Component Based Servicing
     if (Test-Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending") {
       $rebootPending = $true
@@ -363,9 +383,9 @@ function Test-PendingReboot {
 }
 
 # ---------------------------
-# Function: Check-PendingUpdates
+# Function: Get-PendingUpdates
 # ---------------------------
-function Check-PendingUpdates {
+function Get-PendingUpdates {
   try {
     $pendingUpdates = Get-WUList -MicrosoftUpdate -ErrorAction Stop
     $updateCount = 0
@@ -407,11 +427,41 @@ function Restart-Computer-WithNotification {
 
   try {
     Write-Log "Scheduling computer restart in $DelayMinutes minute(s)." -Severity 'Info'
-
-    # Schedule the restart
-    shutdown.exe /r /t ($DelayMinutes * 60) /c "System updates require a restart. Please save your work."
-
+    
+    # Create a more visible notification
+    $message = "System updates require a restart. The computer will restart in $DelayMinutes minutes. Please save your work."
+    
+    # Display a message box for better visibility
+    Add-Type -AssemblyName System.Windows.Forms
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 1000
+    $countdown = $DelayMinutes * 60
+    
+    # Create notification balloon
+    $balloon = New-Object System.Windows.Forms.NotifyIcon
+    $balloon.Icon = [System.Drawing.SystemIcons]::Information
+    $balloon.BalloonTipTitle = "System Restart Required"
+    $balloon.BalloonTipText = $message
+    $balloon.Visible = $true
+    $balloon.ShowBalloonTip(10000)
+    
+    # Use both native restart command and PowerShell command for redundancy
+    Write-Log "Executing shutdown command..." -Severity 'Info'
+    $shutdownArgs = "/r /t $($DelayMinutes * 60) /c `"$message`""
+    Write-Log "Shutdown arguments: $shutdownArgs" -Severity 'Debug'
+    Start-Process -FilePath "shutdown.exe" -ArgumentList $shutdownArgs -NoNewWindow
+    
+    # Also schedule with PowerShell command as backup
+    Write-Log "Setting restart timer with PowerShell..." -Severity 'Info'
+    $restartJob = Start-Job -ScriptBlock {
+        param($delay)
+        Start-Sleep -Seconds $delay
+        Restart-Computer -Force
+    } -ArgumentList ($DelayMinutes * 60)
+    
     Write-Log "Computer restart scheduled in $DelayMinutes minute(s)." -Severity 'Info'
+    $speechSynthesizer.Speak("Your computer will restart in $DelayMinutes minutes to complete updates.")
+    
     return $true
   }
   catch {
@@ -421,11 +471,30 @@ function Restart-Computer-WithNotification {
 }
 
 # ---------------------------
+# Make sure we're running as admin first - do this at the very start
+# ---------------------------
+if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Write-Host "This script requires administrator privileges. Elevating..." -ForegroundColor Yellow
+  try {
+    # Get the current script path
+    $scriptPath = $MyInvocation.MyCommand.Definition
+    # Start a new elevated PowerShell instance
+    Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" -Verb RunAs
+  }
+  catch {
+    Write-Host "Failed to restart with elevated privileges: $_" -ForegroundColor Red
+  }
+  # Exit the current non-elevated instance
+  exit
+}
+
+# ---------------------------
 # Main Execution Block
 # ---------------------------
 try {
-  # Ensure the script is running with Administrator privileges
-  Ensure-Administrator
+  # Set process priority to high for better performance
+  $currentProcess = Get-Process -Id $PID
+  $currentProcess.PriorityClass = 'High'
 
   Write-Log "Driver and Application Update Script Started." -Severity 'Info'
 
@@ -433,8 +502,6 @@ try {
   Install-RequiredModules
 
   # Register Microsoft Update Service
-  Add-Type -AssemblyName System.Speech
-  $speechSynthesizer = New-Object System.Speech.Synthesis.SpeechSynthesizer
   $speechSynthesizer.Speak("Registering Microsoft Update Service.")
   Register-MicrosoftUpdateService
 
@@ -444,8 +511,6 @@ try {
     $driverUpdates = Get-DriverUpdates
 
     # Install driver updates automatically if available
-    Add-Type -AssemblyName System.Speech
-    $speechSynthesizer = New-Object System.Speech.Synthesis.SpeechSynthesizer
     $speechSynthesizer.Speak("Installing driver updates if available.")
     if ($driverUpdates.Count -gt 0) {
       Install-DriverUpdates -DriverUpdates $driverUpdates
@@ -455,10 +520,10 @@ try {
     }
 
     # Upgrade all installed applications using winget
-    $appUpgradeSuccess = Upgrade-InstalledApplications
+    Update-InstalledApplications
 
     # Check for any remaining pending updates
-    $pendingUpdates = Check-PendingUpdates
+    $pendingUpdates = Get-PendingUpdates
 
     # Check for pending reboot
     if (Test-PendingReboot) {
@@ -499,7 +564,6 @@ catch {
   Open-LogFile
 }
 finally {
-  Add-Type -AssemblyName System.Speech
-  $speechSynthesizer = New-Object System.Speech.Synthesis.SpeechSynthesizer
+  # Use existing speech synthesizer object instead of creating a new one
   $speechSynthesizer.Speak("Driver and Application Update Script Completed.")
 }

@@ -190,3 +190,17 @@
 2025-03-03 18:36:43 - [Error] Error writing completion log: The variable '$rebootPending' cannot be retrieved because it has not been set.
 2025-03-03 18:36:43 - [Info] Opened log file at I:\DRIVER UPDATER - WINDOWS\DriverUpdaterLog.txt.
 2025-03-03 18:36:47 - [Info] Script restarted with elevated privileges.
+2025-03-07 19:05:34 - [Info] Restarting script with elevated privileges.
+2025-03-07 19:05:35 - [Info] Script is running with administrator privileges.
+2025-03-07 19:05:35 - [Info] Driver and Application Update Script Started.
+2025-03-07 19:05:35 - [Info] Installing required modules and package providers.
+2025-03-07 19:05:36 - [Debug] NuGet package provider is already installed.
+2025-03-07 19:05:36 - [Debug] NuGet package provider imported successfully.
+2025-03-07 19:06:27 - [Info] Script restarted with elevated privileges.
+2025-03-07 19:06:48 - [Info] Restarting script with elevated privileges.
+2025-03-07 19:06:48 - [Info] Script is running with administrator privileges.
+2025-03-07 19:06:48 - [Info] Driver and Application Update Script Started.
+2025-03-07 19:06:48 - [Info] Installing required modules and package providers.
+2025-03-07 19:06:49 - [Debug] NuGet package provider is already installed.
+2025-03-07 19:06:49 - [Debug] NuGet package provider imported successfully.
+2025-03-07 19:06:59 - [Info] Script restarted with elevated privileges.
