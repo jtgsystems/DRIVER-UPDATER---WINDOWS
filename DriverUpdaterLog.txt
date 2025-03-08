@@ -204,3 +204,18 @@
 2025-03-07 19:06:49 - [Debug] NuGet package provider is already installed.
 2025-03-07 19:06:49 - [Debug] NuGet package provider imported successfully.
 2025-03-07 19:06:59 - [Info] Script restarted with elevated privileges.
+2025-03-07 20:33:56 - [Info] Driver and Application Update Script Started.
+2025-03-07 20:33:56 - [Info] Installing required modules and package providers.
+2025-03-07 20:33:57 - [Debug] NuGet package provider is already installed.
+2025-03-07 20:33:57 - [Debug] NuGet package provider imported successfully.
+2025-03-07 20:34:47 - [Info] Driver and Application Update Script Started.
+2025-03-07 20:34:47 - [Info] Installing required modules and package providers.
+2025-03-07 20:34:48 - [Debug] NuGet package provider is already installed.
+2025-03-07 20:34:48 - [Debug] NuGet package provider imported successfully.
+2025-03-07 20:37:58 - [Info] Driver and Application Update Script Started.
+2025-03-07 20:37:58 - [Info] Attempting to install required modules...
+2025-03-07 20:37:58 - [Info] Installing required modules and package providers.
+2025-03-07 20:37:58 - [Debug] NuGet package provider is already installed.
+2025-03-07 20:37:58 - [Debug] NuGet package provider imported successfully.
+2025-03-07 20:37:58 - [Info] Starting PSGallery repository configuration...
+2025-03-07 20:58:35 - [Debug] PSGallery repository exists with installation policy: Trusted
