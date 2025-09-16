@@ -17,6 +17,7 @@ $TIMEOUT_MINUTES = 30
 # Initialize debug tracking
 $script:correlationId = [guid]::NewGuid().ToString()
 $global:ErrorActionPreference = 'Stop'
+$scriptStartTime = Get-Date
 
 class UpdateException : Exception { }
 
@@ -414,32 +415,109 @@ function Open-LogFile {
     }
 }
 
-# Main execution block
+# Function to show progress with timeout
+function Show-Progress {
+    param(
+        [string]$Activity,
+        [string]$Status,
+        [int]$PercentComplete = 0
+    )
+    Write-Progress -Activity $Activity -Status $Status -PercentComplete $PercentComplete
+    Write-Log "Progress: $Activity - $Status ($PercentComplete%)" -Severity 'Info'
+}
+
+# Function to run operations with timeout
+function Invoke-WithTimeout {
+    param(
+        [scriptblock]$ScriptBlock,
+        [int]$TimeoutMinutes = $TIMEOUT_MINUTES,
+        [string]$OperationName = "Operation"
+    )
+
+    Write-Log "Starting $OperationName with $TimeoutMinutes minute timeout" -Severity 'Info'
+    $job = Start-Job -ScriptBlock $ScriptBlock
+
+    try {
+        if (Wait-Job -Job $job -Timeout ($TimeoutMinutes * 60)) {
+            $result = Receive-Job -Job $job
+            Write-Log "$OperationName completed successfully" -Severity 'Info'
+            return $result
+        } else {
+            Write-Log "$OperationName timed out after $TimeoutMinutes minutes" -Severity 'Warning'
+            Stop-Job -Job $job
+            throw "Operation timeout: $OperationName"
+        }
+    } finally {
+        Remove-Job -Job $job -Force
+    }
+}
+
+# Main execution block with progress tracking
 try {
-    # Check admin privileges and elevate if needed
+    $totalSteps = 6
+    $currentStep = 0
+
+    # Step 1: Check admin privileges
+    $currentStep++
+    Show-Progress -Activity "Windows Driver Updater" -Status "Checking administrative privileges" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+
     if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Log "Script not running with administrative privileges. Attempting to elevate..." -Severity 'Warning'
         Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
         exit
     }
+    Write-Log "Administrative privileges confirmed." -Severity 'Info'
 
-    Write-Log "Windows Update Script Started." -Severity 'Info'
+    # Step 2: Initialize
+    $currentStep++
+    Show-Progress -Activity "Windows Driver Updater" -Status "Initializing script" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Write-Log "=== Windows Driver Update Script Started ===" -Severity 'Info'
+    Write-Log "Correlation ID: $script:correlationId" -Severity 'Info'
+    Write-Log "Script Path: $PSCommandPath" -Severity 'Info'
+    Write-Log "Log File: $logFile" -Severity 'Info'
 
-    # Check internet connection
+    # Step 3: Check internet connection
+    $currentStep++
+    Show-Progress -Activity "Windows Driver Updater" -Status "Checking internet connectivity" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Check-Internet
 
-    # Install required modules
+    # Step 4: Install required modules
+    $currentStep++
+    Show-Progress -Activity "Windows Driver Updater" -Status "Installing required PowerShell modules" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Install-RequiredModules
 
-    # Register Microsoft Update Service for driver updates
+    # Step 5: Register Microsoft Update Service
+    $currentStep++
+    Show-Progress -Activity "Windows Driver Updater" -Status "Registering Microsoft Update Service" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Register-MicrosoftUpdateService
 
-    # Install updates and handle reboots
+    # Step 6: Install updates
+    $currentStep++
+    Show-Progress -Activity "Windows Driver Updater" -Status "Searching and installing driver updates" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Install-Updates
 
+    # Complete
+    Write-Progress -Activity "Windows Driver Updater" -Status "Completed" -PercentComplete 100
+    Write-Log "=== Windows Driver Update Script Completed Successfully ===" -Severity 'Info'
+
 } catch {
-    Write-Log "Unexpected error: $($_.Exception.Message)" -Severity 'Error'
+    Write-Log "=== CRITICAL ERROR ===" -Severity 'Error'
+    Write-Log "Error: $($_.Exception.Message)" -Severity 'Error'
+    Write-Log "Stack Trace: $($_.ScriptStackTrace)" -Severity 'Error'
+    Write-Log "Correlation ID: $script:correlationId" -Severity 'Error'
+
+    # Try to open log file on error
+    try {
+        Open-LogFile
+    } catch {
+        Write-Host "Could not open log file: $($_.Exception.Message)" -ForegroundColor Red
+    }
 } finally {
-    Write-Host "Press any key to exit..." -ForegroundColor Cyan
+    Write-Progress -Activity "Windows Driver Updater" -Completed
+    Write-Host "`n=== Script Execution Summary ===" -ForegroundColor Cyan
+    Write-Host "Log File: $logFile" -ForegroundColor White
+    Write-Host "Correlation ID: $script:correlationId" -ForegroundColor White
+    Write-Host "Execution Time: $([math]::Round(((Get-Date) - $scriptStartTime).TotalMinutes, 2)) minutes" -ForegroundColor White
+    Write-Host "`nPress any key to exit..." -ForegroundColor Cyan
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }
