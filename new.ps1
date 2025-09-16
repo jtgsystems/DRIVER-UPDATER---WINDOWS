@@ -254,30 +254,32 @@ function Test-PendingReboot {
 function Install-Updates {
     Write-Log "Checking for available Windows updates (all categories)..." -Severity 'Info'
     try {
-        # Get ALL available updates (not just drivers)
-        Write-Log "Searching for all Windows updates using PSWindowsUpdate module..." -Severity 'Info'
-        $updates = Get-WindowsUpdate -MicrosoftUpdate -ErrorAction Stop
+        # Get ALL available updates including optional updates (drivers, firmware, etc.)
+        Write-Log "Searching for all Windows updates including optional updates using PSWindowsUpdate module..." -Severity 'Info'
+        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsHidden $false -ErrorAction Stop
 
         if ($updates.Count -gt 0) {
             Write-Log "Found $($updates.Count) Windows updates:" -Severity 'Info'
 
-            # Categorize updates for better logging
+            # Categorize updates for better logging (including optional updates)
             $securityUpdates = $updates | Where-Object { $_.Categories -match "Security Updates" }
             $criticalUpdates = $updates | Where-Object { $_.Categories -match "Critical Updates" }
             $driverUpdates = $updates | Where-Object { $_.Categories -match "Drivers" }
             $featureUpdates = $updates | Where-Object { $_.Categories -match "Feature Packs|Upgrades" }
             $qualityUpdates = $updates | Where-Object { $_.Categories -match "Update Rollups|Updates" }
+            $optionalUpdates = $updates | Where-Object { $_.Categories -match "Optional|Hardware" -or $_.IsOptional -eq $true }
 
-            Write-Log "Update breakdown: Security($($securityUpdates.Count)), Critical($($criticalUpdates.Count)), Drivers($($driverUpdates.Count)), Features($($featureUpdates.Count)), Quality($($qualityUpdates.Count))" -Severity 'Info'
+            Write-Log "Update breakdown: Security($($securityUpdates.Count)), Critical($($criticalUpdates.Count)), Drivers($($driverUpdates.Count)), Features($($featureUpdates.Count)), Quality($($qualityUpdates.Count)), Optional($($optionalUpdates.Count))" -Severity 'Info'
 
             foreach ($update in $updates) {
                 $sizeInMB = if ($update.Size) { [math]::Round($update.Size / 1MB, 2) } else { "Unknown" }
                 $category = ($update.Categories -split ",")[0]
-                Write-Log "  - [$category] $($update.Title) (Size: ${sizeInMB}MB)" -Severity 'Info'
+                $optionalFlag = if ($update.IsOptional) { " [OPTIONAL]" } else { "" }
+                Write-Log "  - [$category] $($update.Title) (Size: ${sizeInMB}MB)$optionalFlag" -Severity 'Info'
             }
 
-            Write-Log "Installing ALL $($updates.Count) Windows updates..." -Severity 'Info'
-            $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose:$false
+            Write-Log "Installing ALL $($updates.Count) Windows updates (including optional updates)..." -Severity 'Info'
+            $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IsHidden $false -IgnoreReboot -ErrorAction Stop -Verbose:$false
 
             # Log installation results
             if ($installResult) {
@@ -325,18 +327,19 @@ function Install-UpdatesViaCOM {
         $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
         $updateSearcher = $updateSession.CreateUpdateSearcher()
 
-        # Search for ALL available updates (not just drivers)
-        $searchCriteria = "IsInstalled=0"
-        Write-Log "Searching for all Windows updates using criteria: $searchCriteria" -Severity 'Info'
+        # Search for ALL available updates including optional (hidden=false)
+        $searchCriteria = "IsInstalled=0 and IsHidden=0"
+        Write-Log "Searching for all Windows updates including optional using criteria: $searchCriteria" -Severity 'Info'
         $searchResult = $updateSearcher.Search($searchCriteria)
 
         if ($searchResult.Updates.Count -gt 0) {
             Write-Log "Found $($searchResult.Updates.Count) Windows updates via COM. Processing..." -Severity 'Info'
 
-            # Log update details
+            # Log update details including optional status
             foreach ($update in $searchResult.Updates) {
                 $sizeInMB = [math]::Round($update.MaxDownloadSize / 1MB, 2)
-                Write-Log "  - $($update.Title) (Size: ${sizeInMB}MB)" -Severity 'Info'
+                $optionalFlag = if ($update.IsOptional) { " [OPTIONAL]" } else { "" }
+                Write-Log "  - $($update.Title) (Size: ${sizeInMB}MB)$optionalFlag" -Severity 'Info'
             }
 
             $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
