@@ -10,8 +10,9 @@ $logFile = Join-Path -Path $scriptDir -ChildPath "WindowsUpdateLog.txt"
 # Constants
 $MICROSOFT_UPDATE_SERVICE_ID = "7971f918-a847-4430-9279-4a52d1efe18d"
 $MAX_LOG_SIZE = 5MB
-$MAX_RETRIES = 3
-$RETRY_DELAY = 30
+$MAX_RETRIES = 5
+$RETRY_DELAY = 15
+$TIMEOUT_MINUTES = 30
 
 # Initialize debug tracking
 $script:correlationId = [guid]::NewGuid().ToString()
@@ -49,53 +50,88 @@ function Write-Log {
     }
 }
 
-# Function to check internet connection with flashing prompt
+# Function to check internet connection with multiple servers
 function Check-Internet {
     Write-Log "Checking for internet connection..." -Severity 'Info'
-    while (-not (Test-NetConnection -ComputerName "www.google.com" -InformationLevel Quiet)) {
-        Write-Host "`r[Connect to internet] " -ForegroundColor Yellow -BackgroundColor Red -NoNewline
-        Start-Sleep -Seconds 1
-        Write-Host "`r                        " -NoNewline
-        Start-Sleep -Seconds 1
+    $testServers = @(
+        "update.microsoft.com",
+        "windowsupdate.microsoft.com",
+        "www.microsoft.com",
+        "8.8.8.8"
+    )
+
+    $connected = $false
+    foreach ($server in $testServers) {
+        try {
+            if (Test-NetConnection -ComputerName $server -InformationLevel Quiet -WarningAction SilentlyContinue) {
+                Write-Log "Internet connection confirmed via $server" -Severity 'Info'
+                $connected = $true
+                break
+            }
+        } catch {
+            Write-Log "Could not reach $server" -Severity 'Warning'
+        }
     }
-    Write-Host "`rInternet connection established." -ForegroundColor Green
-    Write-Log "Internet connection confirmed." -Severity 'Info'
+
+    if (-not $connected) {
+        Write-Log "No internet connection detected. Please connect to the internet and run the script again." -Severity 'Error'
+        throw "Internet connection required for Windows Update operations"
+    }
 }
 
-# Function to install required modules
+# Function to install required modules with exponential backoff
 function Install-RequiredModules {
     Write-Log "Checking and installing required modules..." -Severity 'Info'
     $retryCount = 0
     while ($retryCount -lt $MAX_RETRIES) {
         try {
             if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+                Write-Log "Installing NuGet package provider..." -Severity 'Info'
                 Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop
+                Write-Log "Setting PSGallery as trusted repository..." -Severity 'Info'
                 Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop
-                Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -ErrorAction Stop
+                Write-Log "Installing PSWindowsUpdate module..." -Severity 'Info'
+                Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
                 Write-Log "PSWindowsUpdate module installed successfully." -Severity 'Info'
+            } else {
+                Write-Log "PSWindowsUpdate module already available." -Severity 'Info'
             }
             # Verify module load capability
             Import-Module PSWindowsUpdate -Force -ErrorAction Stop
+            $moduleVersion = (Get-Module PSWindowsUpdate).Version
+            Write-Log "PSWindowsUpdate module loaded successfully (Version: $moduleVersion)" -Severity 'Info'
             return
         } catch {
             $retryCount++
+            $delaySeconds = [Math]::Min($RETRY_DELAY * [Math]::Pow(2, $retryCount - 1), 300) # Exponential backoff, max 5 minutes
             Write-Log "Module installation attempt $retryCount failed: $($_.Exception.Message)" -Severity 'Warning'
-            if ($retryCount -ge $MAX_RETRIES) { throw }
-            Start-Sleep -Seconds $RETRY_DELAY
+            if ($retryCount -ge $MAX_RETRIES) {
+                Write-Log "Failed to install PSWindowsUpdate module after $MAX_RETRIES attempts" -Severity 'Error'
+                throw
+            }
+            Write-Log "Retrying in $delaySeconds seconds..." -Severity 'Info'
+            Start-Sleep -Seconds $delaySeconds
         }
     }
-
 }
 
-# Function to register Microsoft Update Service
+# Function to register Microsoft Update Service with proper COM cleanup
 function Register-MicrosoftUpdateService {
     Write-Log "Registering Microsoft Update Service..." -Severity 'Info'
+    $serviceManager = $null
     try {
         $serviceManager = New-Object -ComObject Microsoft.Update.ServiceManager -ErrorAction Stop
+        if (-not $serviceManager) {
+            throw [UpdateException]::new("Failed to create ServiceManager COM object")
+        }
+
         $service = $serviceManager.Services | Where-Object { $_.ServiceID -eq $MICROSOFT_UPDATE_SERVICE_ID }
         if (-not $service) {
+            Write-Log "Microsoft Update Service not found. Registering..." -Severity 'Info'
             $serviceManager.AddService2($MICROSOFT_UPDATE_SERVICE_ID, 7, "")
-            # Verify service registration
+
+            # Wait and verify service registration
+            Start-Sleep -Seconds 2
             $newService = $serviceManager.Services | Where-Object { $_.ServiceID -eq $MICROSOFT_UPDATE_SERVICE_ID }
             if (-not $newService) {
                 throw [UpdateException]::new("Service registration verification failed")
@@ -107,6 +143,16 @@ function Register-MicrosoftUpdateService {
     } catch {
         Write-Log "Failed to register Microsoft Update Service: $($_.Exception.Message)" -Severity 'Error'
         throw
+    } finally {
+        # Proper COM object cleanup
+        if ($serviceManager) {
+            try {
+                [System.Runtime.InteropServices.Marshal]::ReleaseComObject($serviceManager) | Out-Null
+                Write-Log "ServiceManager COM object released" -Severity 'Info'
+            } catch {
+                Write-Log "Warning: Could not release ServiceManager COM object: $($_.Exception.Message)" -Severity 'Warning'
+            }
+        }
     }
 }
 
@@ -154,15 +200,53 @@ function Delete-UpdateTask {
     }
 }
 
-# Function to test for pending reboot
+# Function to test for pending reboot with multiple registry checks
 function Test-PendingReboot {
     try {
-        $rebootPending = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update" -Name "RebootRequired" -ErrorAction SilentlyContinue) -or
-                         (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue)
-        if ($rebootPending) {
-            Write-Log "Pending reboot detected." -Severity 'Info'
-            return $true
+        $rebootIndicators = @(
+            @{
+                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update"
+                Name = "RebootRequired"
+                Description = "Windows Update Reboot Required"
+            },
+            @{
+                Path = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+                Name = "PendingFileRenameOperations"
+                Description = "Pending File Rename Operations"
+            },
+            @{
+                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
+                Name = "RebootPending"
+                Description = "Component Based Servicing Reboot Pending"
+            },
+            @{
+                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
+                Name = $null
+                Description = "Windows Update Auto Update Reboot Required Key Exists"
+            }
+        )
+
+        foreach ($indicator in $rebootIndicators) {
+            try {
+                if ($indicator.Name) {
+                    $value = Get-ItemProperty -Path $indicator.Path -Name $indicator.Name -ErrorAction SilentlyContinue
+                    if ($value) {
+                        Write-Log "Pending reboot detected: $($indicator.Description)" -Severity 'Warning'
+                        return $true
+                    }
+                } else {
+                    # Check if registry key exists
+                    if (Test-Path $indicator.Path) {
+                        Write-Log "Pending reboot detected: $($indicator.Description)" -Severity 'Warning'
+                        return $true
+                    }
+                }
+            } catch {
+                # Registry key doesn't exist or access denied, continue checking
+                Write-Log "Could not check reboot indicator: $($indicator.Description) - $($_.Exception.Message)" -Severity 'Warning'
+            }
         }
+
         Write-Log "No pending reboot detected." -Severity 'Info'
         return $false
     } catch {
@@ -171,58 +255,128 @@ function Test-PendingReboot {
     }
 }
 
-# Function to install updates and handle reboots
+# Function to install updates and handle reboots with driver focus
 function Install-Updates {
-    Write-Log "Checking for available updates..." -Severity 'Info'
+    Write-Log "Checking for available driver updates..." -Severity 'Info'
     try {
-        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsInstalled:$false -ErrorAction Stop
+        # First, try to get driver updates specifically
+        Write-Log "Searching for driver updates using PSWindowsUpdate module..." -Severity 'Info'
+        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsInstalled:$false -CategoryIds '268C95A1-F734-4526-8263-BDBC74C1F8CA' -ErrorAction Stop
+
         if ($updates.Count -gt 0) {
-            Write-Log "Found $($updates.Count) updates. Installing..." -Severity 'Info'
-            Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop
+            Write-Log "Found $($updates.Count) driver updates:" -Severity 'Info'
+            foreach ($update in $updates) {
+                $sizeInMB = if ($update.Size) { [math]::Round($update.Size / 1MB, 2) } else { "Unknown" }
+                Write-Log "  - $($update.Title) (Size: ${sizeInMB}MB)" -Severity 'Info'
+            }
+
+            Write-Log "Installing driver updates..." -Severity 'Info'
+            $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose:$false
+
+            # Log installation results
+            if ($installResult) {
+                foreach ($result in $installResult) {
+                    $status = if ($result.Result -eq "Installed") { "Success" } else { "Failed" }
+                    Write-Log "Update result: $($result.Title) - $status" -Severity 'Info'
+                }
+            }
+
             if (Test-PendingReboot) {
-                Write-Log "Reboot required. Creating scheduled task and rebooting..." -Severity 'Info'
+                Write-Log "Reboot required after driver updates. Creating scheduled task and rebooting..." -Severity 'Info'
                 Create-UpdateTask
+                Start-Sleep -Seconds 5  # Brief delay before reboot
                 Restart-Computer -Force
+            } else {
+                Write-Log "Driver updates installed successfully. No reboot required." -Severity 'Info'
             }
         } else {
-            Write-Log "No updates available." -Severity 'Info'
-            if (-not (Test-PendingReboot)) {
-                Write-Log "All updates installed and no reboot pending. Cleaning up and opening log..." -Severity 'Info'
-                Delete-UpdateTask
-                Open-LogFile
-            }
+            Write-Log "No driver updates available via PSWindowsUpdate. Trying fallback method..." -Severity 'Info'
+            Install-UpdatesViaCOM
         }
     } catch {
-        Write-Log "Error installing updates with PSWindowsUpdate: $($_.Exception.Message). Falling back to COM." -Severity 'Warning'
+        Write-Log "Error installing updates with PSWindowsUpdate: $($_.Exception.Message)" -Severity 'Warning'
+        Write-Log "Falling back to COM interface..." -Severity 'Info'
         Install-UpdatesViaCOM
+    } finally {
+        # Clean up if no reboot is pending
+        if (-not (Test-PendingReboot)) {
+            Write-Log "All driver updates processed. Cleaning up and opening log..." -Severity 'Info'
+            Delete-UpdateTask
+            Open-LogFile
+        }
     }
 }
 
-# Fallback function to install updates via COM
+# Fallback function to install updates via COM with proper cleanup
 function Install-UpdatesViaCOM {
+    $updateSession = $null
+    $updateSearcher = $null
+    $updatesToInstall = $null
+    $installer = $null
+
     try {
+        Write-Log "Initializing Windows Update COM objects..." -Severity 'Info'
         $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
         $updateSearcher = $updateSession.CreateUpdateSearcher()
-        $searchResult = $updateSearcher.Search("IsInstalled=0")
+
+        # Use better search criteria for driver updates
+        $searchCriteria = "IsInstalled=0 and Type='Driver'"
+        Write-Log "Searching for driver updates using criteria: $searchCriteria" -Severity 'Info'
+        $searchResult = $updateSearcher.Search($searchCriteria)
+
         if ($searchResult.Updates.Count -gt 0) {
-            Write-Log "Found $($searchResult.Updates.Count) updates via COM. Installing..." -Severity 'Info'
+            Write-Log "Found $($searchResult.Updates.Count) driver updates via COM. Processing..." -Severity 'Info'
+
+            # Log update details
+            foreach ($update in $searchResult.Updates) {
+                $sizeInMB = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+                Write-Log "  - $($update.Title) (Size: ${sizeInMB}MB)" -Severity 'Info'
+            }
+
             $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
             foreach ($update in $searchResult.Updates) {
-                if ($update.IsInstalled -eq $false) {
+                if ($update.IsInstalled -eq $false -and $update.EulaAccepted) {
+                    $updatesToInstall.Add($update)
+                } elseif (-not $update.EulaAccepted) {
+                    Write-Log "Accepting EULA for: $($update.Title)" -Severity 'Info'
+                    $update.AcceptEula()
                     $updatesToInstall.Add($update)
                 }
             }
-            $installer = $updateSession.CreateUpdateInstaller()
-            $installer.Updates = $updatesToInstall
-            $installResult = $installer.Install()
-            Write-Log "COM updates installed. Result: $($installResult.ResultCode)" -Severity 'Info'
-            if (Test-PendingReboot) {
-                Write-Log "Reboot required. Creating scheduled task and rebooting..." -Severity 'Info'
-                Create-UpdateTask
-                Restart-Computer -Force
+
+            if ($updatesToInstall.Count -gt 0) {
+                $installer = $updateSession.CreateUpdateInstaller()
+                $installer.Updates = $updatesToInstall
+                Write-Log "Installing $($updatesToInstall.Count) driver updates..." -Severity 'Info'
+                $installResult = $installer.Install()
+
+                # Interpret result codes
+                $resultMessage = switch ($installResult.ResultCode) {
+                    0 { "Not Started" }
+                    1 { "In Progress" }
+                    2 { "Succeeded" }
+                    3 { "Succeeded with Errors" }
+                    4 { "Failed" }
+                    5 { "Aborted" }
+                    default { "Unknown ($($installResult.ResultCode))" }
+                }
+
+                Write-Log "COM update installation completed. Result: $resultMessage" -Severity 'Info'
+
+                if ($installResult.ResultCode -eq 2 -or $installResult.ResultCode -eq 3) {
+                    if (Test-PendingReboot) {
+                        Write-Log "Reboot required. Creating scheduled task and rebooting..." -Severity 'Info'
+                        Create-UpdateTask
+                        Restart-Computer -Force
+                    }
+                } else {
+                    Write-Log "Update installation failed or was incomplete" -Severity 'Warning'
+                }
+            } else {
+                Write-Log "No updates available for installation after EULA processing" -Severity 'Info'
             }
         } else {
-            Write-Log "No updates available via COM." -Severity 'Info'
+            Write-Log "No driver updates available via COM." -Severity 'Info'
             if (-not (Test-PendingReboot)) {
                 Write-Log "All updates installed and no reboot pending. Cleaning up and opening log..." -Severity 'Info'
                 Delete-UpdateTask
@@ -231,6 +385,22 @@ function Install-UpdatesViaCOM {
         }
     } catch {
         Write-Log "Failed to install updates via COM: $($_.Exception.Message)" -Severity 'Error'
+        Write-Log "Stack trace: $($_.ScriptStackTrace)" -Severity 'Error'
+    } finally {
+        # Proper COM object cleanup to prevent memory leaks
+        if ($installer) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($installer) | Out-Null } catch { }
+        }
+        if ($updatesToInstall) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updatesToInstall) | Out-Null } catch { }
+        }
+        if ($updateSearcher) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null } catch { }
+        }
+        if ($updateSession) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null } catch { }
+        }
+        Write-Log "COM objects cleanup completed" -Severity 'Info'
     }
 }
 
