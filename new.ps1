@@ -1,4 +1,4 @@
-# WindowsAutoUpdateScript.ps1
+# WindowsComprehensiveUpdateScript.ps1
 
 # Set execution policy to bypass for this session
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force
@@ -250,47 +250,53 @@ function Test-PendingReboot {
     }
 }
 
-# Function to install updates and handle reboots with driver focus
+# Function to install all Windows updates and handle reboots
 function Install-Updates {
-    Write-Log "Checking for available driver updates..." -Severity 'Info'
+    Write-Log "Checking for available Windows updates (all categories)..." -Severity 'Info'
     try {
-        # First, try to get driver updates specifically
-        Write-Log "Searching for driver updates using PSWindowsUpdate module..." -Severity 'Info'
-        $updates = Get-WindowsUpdate -MicrosoftUpdate -Category "Drivers" -ErrorAction Stop
+        # Get ALL available updates (not just drivers)
+        Write-Log "Searching for all Windows updates using PSWindowsUpdate module..." -Severity 'Info'
+        $updates = Get-WindowsUpdate -MicrosoftUpdate -ErrorAction Stop
 
         if ($updates.Count -gt 0) {
-            Write-Log "Found $($updates.Count) driver updates:" -Severity 'Info'
+            Write-Log "Found $($updates.Count) Windows updates:" -Severity 'Info'
+
+            # Categorize updates for better logging
+            $securityUpdates = $updates | Where-Object { $_.Categories -match "Security Updates" }
+            $criticalUpdates = $updates | Where-Object { $_.Categories -match "Critical Updates" }
+            $driverUpdates = $updates | Where-Object { $_.Categories -match "Drivers" }
+            $featureUpdates = $updates | Where-Object { $_.Categories -match "Feature Packs|Upgrades" }
+            $qualityUpdates = $updates | Where-Object { $_.Categories -match "Update Rollups|Updates" }
+
+            Write-Log "Update breakdown: Security($($securityUpdates.Count)), Critical($($criticalUpdates.Count)), Drivers($($driverUpdates.Count)), Features($($featureUpdates.Count)), Quality($($qualityUpdates.Count))" -Severity 'Info'
+
             foreach ($update in $updates) {
                 $sizeInMB = if ($update.Size) { [math]::Round($update.Size / 1MB, 2) } else { "Unknown" }
-                Write-Log "  - $($update.Title) (Size: ${sizeInMB}MB)" -Severity 'Info'
+                $category = ($update.Categories -split ",")[0]
+                Write-Log "  - [$category] $($update.Title) (Size: ${sizeInMB}MB)" -Severity 'Info'
             }
 
-            # Collect KBArticleIDs to install only these updates
-            $kbList = $updates | ForEach-Object { $_.KBArticleID } | Where-Object { $_ } | Sort-Object -Unique
+            Write-Log "Installing ALL $($updates.Count) Windows updates..." -Severity 'Info'
+            $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose:$false
 
-            if ($kbList.Count -gt 0) {
-                Write-Log "Installing $($kbList.Count) specific driver updates..." -Severity 'Info'
-                $installResult = Install-WindowsUpdate -MicrosoftUpdate -KBArticleID $kbList -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose:$false
-
-                # Log installation results
-                if ($installResult) {
-                    foreach ($result in $installResult) {
-                        $status = if ($result.Result -eq "Installed") { "Success" } else { "Failed" }
-                        Write-Log "Update result: $($result.Title) - $status" -Severity 'Info'
-                    }
+            # Log installation results
+            if ($installResult) {
+                foreach ($result in $installResult) {
+                    $status = if ($result.Result -eq "Installed") { "Success" } else { "Failed" }
+                    Write-Log "Update result: $($result.Title) - $status" -Severity 'Info'
                 }
             }
 
             if (Test-PendingReboot) {
-                Write-Log "Reboot required after driver updates. Creating scheduled task and rebooting..." -Severity 'Info'
+                Write-Log "Reboot required after Windows updates. Creating scheduled task and rebooting..." -Severity 'Info'
                 Create-UpdateTask
                 Start-Sleep -Seconds 5  # Brief delay before reboot
                 Restart-Computer -Force
             } else {
-                Write-Log "Driver updates installed successfully. No reboot required." -Severity 'Info'
+                Write-Log "All Windows updates installed successfully. No reboot required." -Severity 'Info'
             }
         } else {
-            Write-Log "No driver updates available via PSWindowsUpdate. Trying fallback method..." -Severity 'Info'
+            Write-Log "No Windows updates available via PSWindowsUpdate. Trying fallback method..." -Severity 'Info'
             Install-UpdatesViaCOM
         }
     } catch {
@@ -300,7 +306,7 @@ function Install-Updates {
     } finally {
         # Clean up if no reboot is pending
         if (-not (Test-PendingReboot)) {
-            Write-Log "All driver updates processed. Cleaning up and opening log..." -Severity 'Info'
+            Write-Log "All Windows updates processed. Cleaning up and opening log..." -Severity 'Info'
             Delete-UpdateTask
             Open-LogFile
         }
@@ -319,13 +325,13 @@ function Install-UpdatesViaCOM {
         $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
         $updateSearcher = $updateSession.CreateUpdateSearcher()
 
-        # Use better search criteria for driver updates
-        $searchCriteria = "IsInstalled=0 and CategoryIDs contains 'E6CF1350-C01B-414D-A61F-263D14D133B4'"
-        Write-Log "Searching for driver updates using criteria: $searchCriteria" -Severity 'Info'
+        # Search for ALL available updates (not just drivers)
+        $searchCriteria = "IsInstalled=0"
+        Write-Log "Searching for all Windows updates using criteria: $searchCriteria" -Severity 'Info'
         $searchResult = $updateSearcher.Search($searchCriteria)
 
         if ($searchResult.Updates.Count -gt 0) {
-            Write-Log "Found $($searchResult.Updates.Count) driver updates via COM. Processing..." -Severity 'Info'
+            Write-Log "Found $($searchResult.Updates.Count) Windows updates via COM. Processing..." -Severity 'Info'
 
             # Log update details
             foreach ($update in $searchResult.Updates) {
@@ -372,7 +378,7 @@ function Install-UpdatesViaCOM {
                 Write-Log "No updates available for installation" -Severity 'Info'
             }
         } else {
-            Write-Log "No driver updates available via COM." -Severity 'Info'
+            Write-Log "No Windows updates available via COM." -Severity 'Info'
             if (-not (Test-PendingReboot)) {
                 Write-Log "All updates installed and no reboot pending. Cleaning up and opening log..." -Severity 'Info'
                 Delete-UpdateTask
@@ -454,7 +460,7 @@ try {
 
     # Step 1: Check admin privileges
     $currentStep++
-    Show-Progress -Activity "Windows Driver Updater" -Status "Checking administrative privileges" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Checking administrative privileges" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
 
     if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Log "Script not running with administrative privileges. Attempting to elevate..." -Severity 'Warning'
@@ -465,35 +471,49 @@ try {
 
     # Step 2: Initialize
     $currentStep++
-    Show-Progress -Activity "Windows Driver Updater" -Status "Initializing script" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Write-Log "=== Windows Driver Update Script Started ===" -Severity 'Info'
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Initializing script" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Write-Log "=== Windows Comprehensive Update Script Started ===" -Severity 'Info'
     Write-Log "Correlation ID: $script:correlationId" -Severity 'Info'
     Write-Log "Script Path: $PSCommandPath" -Severity 'Info'
     Write-Log "Log File: $logFile" -Severity 'Info'
 
+    # Detect Windows version for full OS updates
+    $osVersion = Get-CimInstance -ClassName Win32_OperatingSystem
+    $windowsVersion = $osVersion.Caption
+    $buildNumber = $osVersion.BuildNumber
+    Write-Log "Detected OS: $windowsVersion (Build: $buildNumber)" -Severity 'Info'
+
+    if ($buildNumber -ge 22000) {
+        Write-Log "Windows 11 detected - will ensure full Windows 11 updates including feature updates" -Severity 'Info'
+    } elseif ($buildNumber -ge 10240) {
+        Write-Log "Windows 10 detected - will ensure full Windows 10 updates including feature updates" -Severity 'Info'
+    } else {
+        Write-Log "Older Windows version detected - will install available updates" -Severity 'Info'
+    }
+
     # Step 3: Check internet connection
     $currentStep++
-    Show-Progress -Activity "Windows Driver Updater" -Status "Checking internet connectivity" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Checking internet connectivity" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Check-Internet
 
     # Step 4: Install required modules
     $currentStep++
-    Show-Progress -Activity "Windows Driver Updater" -Status "Installing required PowerShell modules" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Installing required PowerShell modules" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Install-RequiredModules
 
     # Step 5: Register Microsoft Update Service
     $currentStep++
-    Show-Progress -Activity "Windows Driver Updater" -Status "Registering Microsoft Update Service" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Registering Microsoft Update Service" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Register-MicrosoftUpdateService
 
     # Step 6: Install updates
     $currentStep++
-    Show-Progress -Activity "Windows Driver Updater" -Status "Searching and installing driver updates" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Searching and installing all Windows updates" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Install-Updates
 
     # Complete
-    Write-Progress -Activity "Windows Driver Updater" -Status "Completed" -PercentComplete 100
-    Write-Log "=== Windows Driver Update Script Completed Successfully ===" -Severity 'Info'
+    Write-Progress -Activity "Windows Comprehensive Updater" -Status "Completed" -PercentComplete 100
+    Write-Log "=== Windows Comprehensive Update Script Completed Successfully ===" -Severity 'Info'
 
 } catch {
     Write-Log "=== CRITICAL ERROR ===" -Severity 'Error'
@@ -508,7 +528,7 @@ try {
         Write-Host "Could not open log file: $($_.Exception.Message)" -ForegroundColor Red
     }
 } finally {
-    Write-Progress -Activity "Windows Driver Updater" -Completed
+    Write-Progress -Activity "Windows Comprehensive Updater" -Completed
     Write-Host "`n=== Script Execution Summary ===" -ForegroundColor Cyan
     Write-Host "Log File: $logFile" -ForegroundColor White
     Write-Host "Correlation ID: $script:correlationId" -ForegroundColor White
