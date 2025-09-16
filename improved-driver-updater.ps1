@@ -94,14 +94,28 @@ function Write-EnhancedLog {
 
     # Color coding for console output
     $colors = @{
-        'Info' = 'White'
-        'Warning' = 'Yellow'
-        'Error' = 'Red'
-        'Success' = 'Green'
+        'Info'     = 'White'
+        'Warning'  = 'Yellow'
+        'Error'    = 'Red'
+        'Success'  = 'Green'
         'Security' = 'Magenta'
     }
 
-    Write-Host $logEntry -ForegroundColor $colors[$Level]
+    # Write to host with color
+    if ($Host.UI.SupportsVirtualTerminal) {
+        # Use ANSI escape codes for better compatibility
+        $colorMap = @{
+            'White'   = "`e[97m"
+            'Yellow'  = "`e[93m"
+            'Red'     = "`e[91m"
+            'Green'   = "`e[92m"
+            'Magenta' = "`e[95m"
+        }
+        $colorCode = $colorMap[$colors[$Level]]
+        Write-Host "$colorCode$logEntry`e[0m"
+    } else {
+        Write-Host $logEntry -ForegroundColor $colors[$Level]
+    }
 
     try {
         # Thread-safe file logging
@@ -126,6 +140,7 @@ function Write-EnhancedLog {
         if ($mutex) { $mutex.ReleaseMutex(); $mutex.Dispose() }
     }
 }
+
 
 # Network connectivity validation with retry logic
 function Test-NetworkConnectivity {
@@ -180,23 +195,15 @@ function Install-RequiredModules {
         }
 
         # Install NuGet provider if missing
-        $nugetProvider = Get-PackageProvider -Name "NuGet" -ErrorAction SilentlyContinue
-        if (-not $nugetProvider -or $nugetProvider.Version -lt [Version]"2.8.5.201") {
-            Write-EnhancedLog "Installing NuGet package provider" -Level Info
-            Install-PackageProvider -Name "NuGet" -MinimumVersion "2.8.5.201" -Force -Scope CurrentUser
+        if (-not (Get-PackageProvider -Name "NuGet" -ErrorAction SilentlyContinue)) {
+             Write-EnhancedLog "Installing NuGet package provider" -Level Info
+             Install-PackageProvider -Name "NuGet" -MinimumVersion "2.8.5.201" -Force -Scope CurrentUser
         }
 
         # Install PSWindowsUpdate module with verification
-        $moduleInstalled = Get-Module -ListAvailable -Name "PSWindowsUpdate"
-        if (-not $moduleInstalled) {
+        if (-not (Get-Module -ListAvailable -Name "PSWindowsUpdate")) {
             Write-EnhancedLog "Installing PSWindowsUpdate module from PowerShell Gallery" -Level Info
             Install-Module -Name "PSWindowsUpdate" -Force -Scope CurrentUser -AllowClobber
-
-            # Verify installation
-            $moduleInstalled = Get-Module -ListAvailable -Name "PSWindowsUpdate"
-            if (-not $moduleInstalled) {
-                throw "Failed to install PSWindowsUpdate module"
-            }
         }
 
         # Import and validate module
@@ -249,14 +256,15 @@ function Register-MicrosoftUpdateService {
         else {
             Write-EnhancedLog "Microsoft Update Service already registered (Name: $($existingService.Name))" -Level Info
         }
-
-        # Release COM object
-        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($serviceManager) | Out-Null
-
     }
     catch {
         Write-EnhancedLog "Failed to register Microsoft Update Service: $($_.Exception.Message)" -Level Error
         throw
+    }
+    finally {
+        if ($serviceManager) {
+            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($serviceManager) | Out-Null
+        }
     }
 }
 
@@ -275,13 +283,13 @@ function Get-AvailableUpdates {
         $searchCriteria = if ($DriversOnly) {
             @{
                 MicrosoftUpdate = $true
-                IsInstalled = $false
-                CategoryIds = @("268C95A1-F734-4526-8263-BDBC74C1F8CA") # Device Drivers category
+                IsInstalled     = $false
+                CategoryIds     = '268C95A1-F734-4526-8263-BDBC74C1F8CA' # Device Drivers category
             }
         } else {
             @{
                 MicrosoftUpdate = $true
-                IsInstalled = $false
+                IsInstalled     = $false
             }
         }
 
@@ -302,7 +310,6 @@ function Get-AvailableUpdates {
         }
 
         return $updates
-
     }
     catch {
         Write-EnhancedLog "Update search failed, attempting fallback method: $($_.Exception.Message)" -Level Warning
@@ -364,29 +371,27 @@ function Install-Updates {
     try {
         # Use PSWindowsUpdate for installation with enhanced options
         $installParams = @{
-            AcceptAll = $true
-            IgnoreReboot = $true
-            Verbose = $false
-            ForceInstall = $false
+            AcceptAll     = $true
+            IgnoreReboot  = $true
+            Verbose       = $false
+            ForceInstall  = $false
+            WindowsUpdate = $true
         }
 
         # Add timeout protection
         $job = Start-Job -ScriptBlock {
-            param($Updates, $InstallParams)
+            param($InstallParams)
             Import-Module PSWindowsUpdate -Force
             Install-WindowsUpdate @InstallParams
-        } -ArgumentList $Updates, $installParams
+        } -ArgumentList $installParams
 
-        $completed = Wait-Job -Job $job -Timeout ($UPDATE_TIMEOUT_MINUTES * 60)
+        if (Wait-Job -Job $job -Timeout ($UPDATE_TIMEOUT_MINUTES * 60)) {
+            Receive-Job -Job $job | Out-Null
+            Write-EnhancedLog "Update installation process completed" -Level Success
 
-        if ($completed) {
-            $result = Receive-Job -Job $job
-            Write-EnhancedLog "Update installation completed successfully" -Level Success
-
-            # Check if reboot is required
-            $rebootRequired = Test-PendingReboot
-            if ($rebootRequired) {
-                Write-EnhancedLog "System reboot is required to complete update installation" -Level Warning
+            if (Test-PendingReboot) {
+                Write-EnhancedLog "System reboot is required. Creating a scheduled task to continue after reboot." -Level Warning
+                Create-UpdateTask
                 return $true # Indicates reboot needed
             }
         }
@@ -396,13 +401,54 @@ function Install-Updates {
             throw "Update installation timeout"
         }
 
-        Remove-Job -Job $job -Force
         return $false # No reboot needed
-
     }
     catch {
         Write-EnhancedLog "Update installation failed: $($_.Exception.Message)" -Level Error
         throw
+    }
+    finally {
+        if ($job) {
+            Remove-Job -Job $job -Force
+        }
+    }
+}
+
+# Function to create scheduled task for post-reboot execution
+function Create-UpdateTask {
+    [CmdletBinding()]
+    param()
+
+    $taskName = "EnhancedDriverUpdaterTask"
+    $taskPath = "\Microsoft\Windows\PowerShell\"
+    Write-EnhancedLog "Creating scheduled task '$taskName' for post-reboot execution" -Level Info
+
+    try {
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`""
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+
+        Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Resumes the driver update process after a reboot." -Force -ErrorAction Stop
+        Write-EnhancedLog "Scheduled task '$taskName' created successfully" -Level Success
+    }
+    catch {
+        Write-EnhancedLog "Failed to create scheduled task: $($_.Exception.Message)" -Level Error
+    }
+}
+
+# Function to delete the post-reboot scheduled task
+function Delete-UpdateTask {
+    [CmdletBinding()]
+    param()
+
+    $taskName = "EnhancedDriverUpdaterTask"
+    $taskPath = "\Microsoft\Windows\PowerShell\"
+
+    if (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue) {
+        Write-EnhancedLog "Deleting post-reboot scheduled task '$taskName'" -Level Info
+        Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction Stop
+        Write-EnhancedLog "Scheduled task '$taskName' deleted successfully" -Level Success
     }
 }
 
@@ -415,32 +461,26 @@ function Test-PendingReboot {
 
     $rebootIndicators = @(
         @{
-            Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update"
-            Name = "RebootRequired"
+            Path        = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update"
+            Name        = "RebootRequired"
             Description = "Windows Update Reboot Required"
         },
         @{
-            Path = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-            Name = "PendingFileRenameOperations"
+            Path        = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+            Name        = "PendingFileRenameOperations"
             Description = "Pending File Rename Operations"
         },
         @{
-            Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
-            Name = "RebootPending"
+            Path        = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
+            Name        = "RebootPending"
             Description = "Component Based Servicing Reboot Pending"
         }
     )
 
     foreach ($indicator in $rebootIndicators) {
-        try {
-            $value = Get-ItemProperty -Path $indicator.Path -Name $indicator.Name -ErrorAction SilentlyContinue
-            if ($value) {
-                Write-EnhancedLog "Pending reboot detected: $($indicator.Description)" -Level Warning
-                return $true
-            }
-        }
-        catch {
-            # Registry key doesn't exist, continue checking
+        if (Get-ItemProperty -Path $indicator.Path -Name $indicator.Name -ErrorAction SilentlyContinue) {
+            Write-EnhancedLog "Pending reboot detected: $($indicator.Description)" -Level Warning
+            return $true
         }
     }
 
@@ -459,10 +499,13 @@ function Start-DriverUpdate {
 
     try {
         # Security validation
-        Write-EnhancedLog "Performing security validation" -Level Security
-
         if (-not [SecurityValidator]::ValidateAdminPrivileges()) {
-            throw "This script requires administrative privileges. Please run as Administrator."
+            Write-EnhancedLog "Administrative privileges not detected. Attempting to elevate..." -Level Warning
+            $powershellPath = (Get-Command powershell.exe).Path
+            $scriptPath = $MyInvocation.MyCommand.Path
+            $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" $($MyInvocation.Line)"
+            Start-Process -FilePath $powershellPath -ArgumentList $arguments -Verb RunAs
+            exit
         }
         Write-EnhancedLog "Administrative privileges validated" -Level Security
 
@@ -470,6 +513,9 @@ function Start-DriverUpdate {
             throw "Windows Update service is not accessible. System integrity check failed."
         }
         Write-EnhancedLog "System integrity validated" -Level Security
+
+        # Clean up any lingering scheduled task from a previous run
+        Delete-UpdateTask
 
         # Network connectivity test
         Test-NetworkConnectivity
@@ -487,35 +533,32 @@ function Start-DriverUpdate {
         # Get available updates
         $availableUpdates = Get-AvailableUpdates -DriversOnly $driverTypesOnly
 
-        if ($availableUpdates -and $availableUpdates.Count -gt 0) {
+        if ($availableUpdates) {
             # Install updates
             $rebootRequired = Install-Updates -Updates $availableUpdates
 
             if ($rebootRequired) {
-                Write-EnhancedLog "Update installation completed. System reboot required." -Level Warning
-                Write-EnhancedLog "Please reboot the system and run the script again to check for additional updates." -Level Info
-            }
-            else {
+                Write-EnhancedLog "Updates installed, a reboot is required to complete the installation." -Level Warning
+                Write-EnhancedLog "The script will continue automatically after the reboot." -Level Info
+                Restart-Computer -Force
+            } else {
                 Write-EnhancedLog "Update installation completed successfully. No reboot required." -Level Success
             }
         }
         else {
             Write-EnhancedLog "System is up to date. No updates available." -Level Success
         }
-
     }
     catch {
-        Write-EnhancedLog "Critical error occurred: $($_.Exception.Message)" -Level Error
-        Write-EnhancedLog "Stack trace: $($_.ScriptStackTrace)" -Level Error
+        Write-EnhancedLog "Critical error occurred: $($_.Exception.ToString())" -Level Error
         throw
     }
     finally {
         Write-EnhancedLog "=== Enhanced Windows Driver Updater Completed ===" -Level Info
-        Write-EnhancedLog "Log file location: $script:LogFile" -Level Info
 
         # Open log file for review
         if (Test-Path $script:LogFile) {
-            Write-EnhancedLog "Opening log file for review" -Level Info
+            Write-EnhancedLog "Opening log file for review: $script:LogFile" -Level Info
             try {
                 Invoke-Item -Path $script:LogFile
             }
@@ -532,12 +575,11 @@ if ($MyInvocation.InvocationName -ne '.') {
         Start-DriverUpdate
     }
     catch {
-        Write-Host "`nScript execution failed. Check the log file for details: $script:LogFile" -ForegroundColor Red
-        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+        # Errors are already logged by Start-DriverUpdate
         exit 1
     }
     finally {
-        Write-Host "`nPress any key to exit..." -ForegroundColor Cyan
+        Write-EnhancedLog "Script finished. Press any key to exit..." -Level Info
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     }
 }
