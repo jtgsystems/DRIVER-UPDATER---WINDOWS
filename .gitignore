@@ -1,0 +1,35 @@
+# VS Code settings and workspace files
+.vscode/
+*.code-workspace
+
+# PowerShell execution logs
+WindowsUpdateLog*.txt
+DriverUpdaterLog*.txt
+
+# Temporary files
+*.tmp
+*.temp
+
+# Windows thumbnail cache files
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# PowerShell transcripts
+PowerShell_transcript.*
+
+# Backup files
+*.bak
+*.backup
+original_*.ps1
+
+# Test files
+test_*.ps1
+debug_*.ps1
+temp_*.ps1

@@ -4,6 +4,9 @@
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-success.svg)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/your-repo/graphs/commit-activity)
+[![JTG Systems](https://img.shields.io/badge/Developed%20by-JTG%20Systems-orange.svg)](https://jtgsystems.com)
+
+**Developed by [Joint Technology Group](https://jointtechnologygroup.com) | Professional IT Solutions by [JTG Systems](https://jtgsystems.com)**
 
 > **The most comprehensive Windows update automation solution available** - Covers 95-98% of your Windows update ecosystem including Windows Updates, WinGet packages, Microsoft Store apps, security definitions, PowerShell modules, and system integrity validation.
 
@@ -183,6 +186,8 @@ If this script has helped you maintain your Windows systems more effectively, pl
 
 - 🐛 **Issues**: [GitHub Issues](https://github.com/your-repo/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/your-repo/discussions)
+- 🌐 **Professional Support**: [JTG Systems](https://jtgsystems.com) - Enterprise IT Solutions
+- 🏢 **Corporate Services**: [Joint Technology Group](https://jointtechnologygroup.com) - Technology Consulting
 - 📧 **Security**: Report security issues privately via email
 
 ---
@@ -200,6 +205,23 @@ If this script has helped you maintain your Windows systems more effectively, pl
 **Industry Keywords**: system administrator tools, IT infrastructure automation, enterprise software deployment, windows fleet management, automated patch deployment, security compliance automation, system health monitoring, desktop management solution, endpoint management automation, windows infrastructure maintenance, corporate IT solutions, automated system updates enterprise
 
 **Problem-solving Keywords**: fix windows update issues, automate windows maintenance, prevent windows update failures, streamline system administration, reduce IT workload, enterprise update compliance, automated security patching, system reliability improvement, minimize system downtime, comprehensive system monitoring, proactive system maintenance, automated troubleshooting tools
+
+---
+
+## 🏢 **About the Developers**
+
+**[Joint Technology Group](https://jointtechnologygroup.com)** specializes in enterprise technology consulting and custom software solutions. We help businesses streamline their IT operations through intelligent automation and system optimization.
+
+**[JTG Systems](https://jtgsystems.com)** provides professional IT services including system administration, infrastructure management, and custom script development for Windows environments. Our expertise in PowerShell automation and enterprise system management ensures reliable, scalable solutions for organizations of all sizes.
+
+### Professional Services Available:
+- **Custom PowerShell Development** - Tailored automation scripts for your environment
+- **Enterprise System Management** - Large-scale Windows infrastructure optimization
+- **IT Automation Consulting** - Process improvement and efficiency enhancement
+- **System Integration Services** - Seamless technology ecosystem connectivity
+- **Managed IT Solutions** - Comprehensive technology support and maintenance
+
+*Contact us for professional implementation, customization, or enterprise support of this Windows update automation solution.*
 
 ---
 
