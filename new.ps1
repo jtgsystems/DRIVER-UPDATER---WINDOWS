@@ -456,9 +456,227 @@ function Invoke-WithTimeout {
     }
 }
 
+# Function to update WinGet packages
+function Update-WinGetPackages {
+    try {
+        Write-Log "Checking for WinGet package updates..." -Severity 'Info'
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Log "WinGet found. Checking for available package updates..." -Severity 'Info'
+
+            # Get list of upgradable packages
+            $wingetOutput = winget upgrade --source winget --disable-interactivity 2>&1
+            $wingetString = $wingetOutput | Out-String
+
+            if ($wingetString -match "No available upgrades") {
+                Write-Log "No WinGet package updates available." -Severity 'Info'
+            } else {
+                Write-Log "WinGet package updates available. Installing..." -Severity 'Info'
+                $upgradeResult = winget upgrade --all --silent --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1
+                $upgradeString = $upgradeResult | Out-String
+
+                if ($upgradeString -match "Successfully installed") {
+                    Write-Log "WinGet packages updated successfully." -Severity 'Info'
+                } else {
+                    Write-Log "WinGet upgrade completed with mixed results. Check individual package status." -Severity 'Warning'
+                }
+            }
+        } else {
+            Write-Log "WinGet not available on this system. Skipping package updates." -Severity 'Warning'
+        }
+    } catch {
+        Write-Log "Error updating WinGet packages: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Function to update Microsoft Store apps
+function Update-StoreApps {
+    try {
+        Write-Log "Checking for Microsoft Store app updates..." -Severity 'Info'
+        if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+            Write-Log "Triggering Microsoft Store app update scan..." -Severity 'Info'
+
+            # Try to trigger Store app updates using CIM method
+            try {
+                $namespace = "Root\cimv2\mdm\dmmap"
+                $className = "MDM_EnterpriseModernAppManagement_AppManagement01"
+                $cimInstance = Get-CimInstance -Namespace $namespace -ClassName $className -ErrorAction SilentlyContinue
+
+                if ($cimInstance) {
+                    Invoke-CimMethod -CimInstance $cimInstance -MethodName UpdateScanMethod
+                    Write-Log "Store app update scan initiated via CIM." -Severity 'Info'
+                } else {
+                    Write-Log "CIM method not available. Trying PowerShell alternative..." -Severity 'Info'
+
+                    # Alternative method using PowerShell jobs
+                    $storeUpdateJob = Start-Job -ScriptBlock {
+                        try {
+                            # Try to force Store updates using ms-windows-store protocol
+                            Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction SilentlyContinue
+                            Start-Sleep -Seconds 10
+
+                            # Get list of all user apps and check for updates
+                            $packages = Get-AppxPackage -AllUsers | Where-Object { $_.SignatureKind -eq 'Store' }
+                            return "Found $($packages.Count) Store packages"
+                        } catch {
+                            return "Error: $($_.Exception.Message)"
+                        }
+                    }
+
+                    $storeResult = Wait-Job -Job $storeUpdateJob -Timeout 30 | Receive-Job
+                    Remove-Job -Job $storeUpdateJob -Force
+                    Write-Log "Store update attempt: $storeResult" -Severity 'Info'
+                }
+            } catch {
+                Write-Log "Could not trigger Store app updates: $($_.Exception.Message)" -Severity 'Warning'
+            }
+        } else {
+            Write-Log "AppX packages not available on this system." -Severity 'Warning'
+        }
+    } catch {
+        Write-Log "Error updating Store apps: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Function to update Windows Defender definitions
+function Update-DefenderDefinitions {
+    try {
+        Write-Log "Updating Windows Defender definitions..." -Severity 'Info'
+
+        # Check if Windows Defender is available
+        if (Get-Command Update-MpSignature -ErrorAction SilentlyContinue) {
+            Write-Log "Updating Windows Defender signature definitions..." -Severity 'Info'
+            Update-MpSignature -UpdateSource WindowsUpdate
+            Write-Log "Windows Defender definitions updated successfully." -Severity 'Info'
+
+            # Get current signature version
+            try {
+                $mpPreference = Get-MpPreference -ErrorAction SilentlyContinue
+                if ($mpPreference) {
+                    $signatureInfo = Get-MpComputerStatus -ErrorAction SilentlyContinue
+                    if ($signatureInfo) {
+                        Write-Log "Current Defender signature version: $($signatureInfo.AntivirusSignatureVersion)" -Severity 'Info'
+                        Write-Log "Last signature update: $($signatureInfo.AntivirusSignatureLastUpdated)" -Severity 'Info'
+                    }
+                }
+            } catch {
+                Write-Log "Could not retrieve Defender signature information: $($_.Exception.Message)" -Severity 'Warning'
+            }
+        } else {
+            Write-Log "Windows Defender PowerShell module not available. Trying alternative method..." -Severity 'Warning'
+
+            # Alternative method using MpCmdRun.exe
+            $mpCmdPath = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+            if (Test-Path $mpCmdPath) {
+                Write-Log "Updating Defender definitions using MpCmdRun.exe..." -Severity 'Info'
+                $mpResult = Start-Process -FilePath $mpCmdPath -ArgumentList "-SignatureUpdate" -Wait -PassThru -NoNewWindow
+                if ($mpResult.ExitCode -eq 0) {
+                    Write-Log "Defender definitions updated successfully via MpCmdRun." -Severity 'Info'
+                } else {
+                    Write-Log "MpCmdRun returned exit code: $($mpResult.ExitCode)" -Severity 'Warning'
+                }
+            } else {
+                Write-Log "Windows Defender not found on this system." -Severity 'Warning'
+            }
+        }
+    } catch {
+        Write-Log "Error updating Defender definitions: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Function to update PowerShell modules
+function Update-PowerShellModules {
+    try {
+        Write-Log "Checking for PowerShell module updates..." -Severity 'Info'
+
+        # Get all installed modules
+        $installedModules = Get-InstalledModule -ErrorAction SilentlyContinue
+
+        if ($installedModules) {
+            Write-Log "Found $($installedModules.Count) installed PowerShell modules. Checking for updates..." -Severity 'Info'
+
+            $outdatedModules = @()
+            foreach ($module in $installedModules) {
+                try {
+                    $latestVersion = Find-Module -Name $module.Name -ErrorAction SilentlyContinue
+                    if ($latestVersion -and ($latestVersion.Version -gt $module.Version)) {
+                        $outdatedModules += $module
+                        Write-Log "Module update available: $($module.Name) $($module.Version) -> $($latestVersion.Version)" -Severity 'Info'
+                    }
+                } catch {
+                    Write-Log "Could not check updates for module: $($module.Name)" -Severity 'Warning'
+                }
+            }
+
+            if ($outdatedModules.Count -gt 0) {
+                Write-Log "Updating $($outdatedModules.Count) PowerShell modules..." -Severity 'Info'
+                foreach ($module in $outdatedModules) {
+                    try {
+                        Write-Log "Updating module: $($module.Name)" -Severity 'Info'
+                        Update-Module -Name $module.Name -Force -AcceptLicense -ErrorAction Stop
+                        Write-Log "Successfully updated module: $($module.Name)" -Severity 'Info'
+                    } catch {
+                        Write-Log "Failed to update module $($module.Name): $($_.Exception.Message)" -Severity 'Warning'
+                    }
+                }
+            } else {
+                Write-Log "All PowerShell modules are up to date." -Severity 'Info'
+            }
+        } else {
+            Write-Log "No installed PowerShell modules found to update." -Severity 'Info'
+        }
+    } catch {
+        Write-Log "Error updating PowerShell modules: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Function to perform system integrity checks
+function Invoke-SystemIntegrityCheck {
+    try {
+        Write-Log "Running system file integrity checks..." -Severity 'Info'
+
+        # Run SFC scan
+        Write-Log "Starting System File Checker (SFC) scan..." -Severity 'Info'
+        $sfcProcess = Start-Process -FilePath "sfc.exe" -ArgumentList "/scannow" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\sfc_output.txt"
+
+        if (Test-Path "$env:TEMP\sfc_output.txt") {
+            $sfcOutput = Get-Content "$env:TEMP\sfc_output.txt" -ErrorAction SilentlyContinue
+            if ($sfcOutput) {
+                $sfcResult = $sfcOutput | Select-String "Windows Resource Protection" | Select-Object -Last 1
+                if ($sfcResult) {
+                    Write-Log "SFC Result: $($sfcResult.Line)" -Severity 'Info'
+                }
+            }
+            Remove-Item "$env:TEMP\sfc_output.txt" -Force -ErrorAction SilentlyContinue
+        }
+
+        if ($sfcProcess.ExitCode -eq 0) {
+            Write-Log "System File Checker completed successfully." -Severity 'Info'
+        } else {
+            Write-Log "System File Checker returned exit code: $($sfcProcess.ExitCode)" -Severity 'Warning'
+        }
+
+        # Run DISM health check
+        Write-Log "Starting DISM component store health check..." -Severity 'Info'
+        try {
+            $dismProcess = Start-Process -FilePath "DISM.exe" -ArgumentList "/Online", "/Cleanup-Image", "/RestoreHealth" -Wait -PassThru -NoNewWindow
+            if ($dismProcess.ExitCode -eq 0) {
+                Write-Log "DISM health restoration completed successfully." -Severity 'Info'
+            } else {
+                Write-Log "DISM returned exit code: $($dismProcess.ExitCode)" -Severity 'Warning'
+            }
+        } catch {
+            Write-Log "Error running DISM: $($_.Exception.Message)" -Severity 'Warning'
+        }
+
+        Write-Log "System integrity checks completed." -Severity 'Info'
+    } catch {
+        Write-Log "Error during system integrity check: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
 # Main execution block with progress tracking
 try {
-    $totalSteps = 6
+    $totalSteps = 11  # Updated to include all new components
     $currentStep = 0
 
     # Step 1: Check admin privileges
@@ -509,14 +727,40 @@ try {
     Show-Progress -Activity "Windows Comprehensive Updater" -Status "Registering Microsoft Update Service" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Register-MicrosoftUpdateService
 
-    # Step 6: Install updates
+    # Step 6: Install Windows updates
     $currentStep++
     Show-Progress -Activity "Windows Comprehensive Updater" -Status "Searching and installing all Windows updates" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
     Install-Updates
 
+    # Step 7: Update WinGet packages
+    $currentStep++
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating WinGet packages" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Update-WinGetPackages
+
+    # Step 8: Update Microsoft Store apps
+    $currentStep++
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating Microsoft Store applications" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Update-StoreApps
+
+    # Step 9: Update Windows Defender definitions
+    $currentStep++
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating Windows Defender definitions" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Update-DefenderDefinitions
+
+    # Step 10: Update PowerShell modules
+    $currentStep++
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating PowerShell modules" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Update-PowerShellModules
+
+    # Step 11: System integrity checks
+    $currentStep++
+    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Running system integrity checks" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    Invoke-SystemIntegrityCheck
+
     # Complete
     Write-Progress -Activity "Windows Comprehensive Updater" -Status "Completed" -PercentComplete 100
     Write-Log "=== Windows Comprehensive Update Script Completed Successfully ===" -Severity 'Info'
+    Write-Log "Summary: All update categories processed - Windows Updates, WinGet packages, Store apps, Defender definitions, PowerShell modules, and system integrity checks." -Severity 'Info'
 
 } catch {
     Write-Log "=== CRITICAL ERROR ===" -Severity 'Error'
