@@ -3,7 +3,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-success.svg)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/your-repo/graphs/commit-activity)
+[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/graphs/commit-activity)
 [![JTG Systems](https://img.shields.io/badge/Developed%20by-JTG%20Systems-orange.svg)](https://jtgsystems.com)
 
 **Developed by [Joint Technology Group](https://jointtechnologygroup.com) | Professional IT Solutions by [JTG Systems](https://jtgsystems.com)**
@@ -49,7 +49,7 @@ Unlike basic Windows update scripts that only handle Microsoft updates, this com
 ### One-Click Installation
 ```powershell
 # Download and run (recommended for first-time users)
-Invoke-WebRequest -Uri "https://github.com/your-repo/raw/main/new.ps1" -OutFile "WindowsUpdater.ps1"
+Invoke-WebRequest -Uri "https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/raw/main/new.ps1" -OutFile "WindowsUpdater.ps1"
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force
 .\WindowsUpdater.ps1
 ```
@@ -57,8 +57,8 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force
 ### Advanced Usage
 ```powershell
 # Clone repository for full documentation
-git clone https://github.com/your-repo/windows-comprehensive-updater.git
-cd windows-comprehensive-updater
+git clone https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS.git
+cd DRIVER-UPDATER---WINDOWS
 .\new.ps1
 ```
 
@@ -160,8 +160,8 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 ### Development Setup
 ```powershell
 # Fork the repository
-git clone https://github.com/your-username/windows-comprehensive-updater.git
-cd windows-comprehensive-updater
+git clone https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS.git
+cd DRIVER-UPDATER---WINDOWS
 
 # Create feature branch
 git checkout -b feature/your-enhancement
@@ -184,8 +184,8 @@ If this script has helped you maintain your Windows systems more effectively, pl
 
 ## 📞 **Support & Community**
 
-- 🐛 **Issues**: [GitHub Issues](https://github.com/your-repo/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-repo/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/discussions)
 - 🌐 **Professional Support**: [JTG Systems](https://jtgsystems.com) - Enterprise IT Solutions
 - 🏢 **Corporate Services**: [Joint Technology Group](https://jointtechnologygroup.com) - Technology Consulting
 - 📧 **Security**: Report security issues privately via email
