@@ -336,11 +336,7 @@ function Install-UpdatesViaCOM {
 
             $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
             foreach ($update in $searchResult.Updates) {
-                if ($update.IsInstalled -eq $false -and $update.EulaAccepted) {
-                    $updatesToInstall.Add($update)
-                } elseif (-not $update.EulaAccepted) {
-                    Write-Log "Accepting EULA for: $($update.Title)" -Severity 'Info'
-                    $update.AcceptEula()
+                if ($update.IsInstalled -eq $false) {
                     $updatesToInstall.Add($update)
                 }
             }
@@ -374,7 +370,7 @@ function Install-UpdatesViaCOM {
                     Write-Log "Update installation failed or was incomplete" -Severity 'Warning'
                 }
             } else {
-                Write-Log "No updates available for installation after EULA processing" -Severity 'Info'
+                Write-Log "No updates available for installation" -Severity 'Info'
             }
         } else {
             Write-Log "No driver updates available via COM." -Severity 'Info'

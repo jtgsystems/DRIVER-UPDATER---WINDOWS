@@ -144,18 +144,10 @@ foreach ($update in $updates) {
 ```
 **Benefit:** Much better troubleshooting capabilities, detailed audit trail
 
-### 9. EULA Handling in COM Interface
-**Added:**
-```powershell
-foreach ($update in $searchResult.Updates) {
-    if (-not $update.EulaAccepted) {
-        Write-Log "Accepting EULA for: $($update.Title)" -Severity 'Info'
-        $update.AcceptEula()
-    }
-    $updatesToInstall.Add($update)
-}
-```
-**Benefit:** Handles driver EULAs automatically, prevents installation failures
+### 9. ~~EULA Handling in COM Interface~~ (REMOVED)
+**Previous implementation removed per user request**
+- Original: Automatic EULA acceptance for drivers
+- Current: No EULA handling - user preference
 
 ### 10. Better Error Interpretation
 **Added:**
@@ -195,5 +187,6 @@ The enhanced script now provides:
 - ✅ **Improved user experience** - Progress bars, better logging, execution summaries
 - ✅ **Robust error handling** - Multiple retry strategies, detailed error reporting
 - ✅ **Production-ready features** - Correlation IDs, comprehensive reboot detection
+- ✅ **No EULA interference** - Removed automatic EULA handling per user preference
 
 All improvements focus on functionality and reliability while keeping the script easy to use for development/testing purposes.
