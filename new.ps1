@@ -201,49 +201,43 @@ function Delete-UpdateTask {
     }
 }
 
-# Function to test for pending reboot with multiple registry checks
+# Function to test for pending reboot with corrected registry checks
 function Test-PendingReboot {
     try {
         $rebootIndicators = @(
             @{
-                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update"
-                Name = "RebootRequired"
-                Description = "Windows Update Reboot Required"
-            },
-            @{
-                Path = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                Name = "PendingFileRenameOperations"
-                Description = "Pending File Rename Operations"
-            },
-            @{
-                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
-                Name = "RebootPending"
+                TestType = "KeyExists"
+                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"
                 Description = "Component Based Servicing Reboot Pending"
             },
             @{
+                TestType = "KeyExists"
                 Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
-                Name = $null
-                Description = "Windows Update Auto Update Reboot Required Key Exists"
+                Description = "Windows Update Reboot Required"
+            },
+            @{
+                TestType = "ValueExists"
+                Path = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+                Name = "PendingFileRenameOperations"
+                Description = "Pending File Rename Operations"
             }
         )
 
         foreach ($indicator in $rebootIndicators) {
             try {
-                if ($indicator.Name) {
-                    $value = Get-ItemProperty -Path $indicator.Path -Name $indicator.Name -ErrorAction SilentlyContinue
-                    if ($value) {
+                if ($indicator.TestType -eq "KeyExists") {
+                    if (Test-Path $indicator.Path) {
                         Write-Log "Pending reboot detected: $($indicator.Description)" -Severity 'Warning'
                         return $true
                     }
-                } else {
-                    # Check if registry key exists
-                    if (Test-Path $indicator.Path) {
+                } elseif ($indicator.TestType -eq "ValueExists") {
+                    $value = Get-ItemProperty -Path $indicator.Path -Name $indicator.Name -ErrorAction SilentlyContinue
+                    if ($value -and $value.($indicator.Name)) {
                         Write-Log "Pending reboot detected: $($indicator.Description)" -Severity 'Warning'
                         return $true
                     }
                 }
             } catch {
-                # Registry key doesn't exist or access denied, continue checking
                 Write-Log "Could not check reboot indicator: $($indicator.Description) - $($_.Exception.Message)" -Severity 'Warning'
             }
         }
@@ -262,7 +256,7 @@ function Install-Updates {
     try {
         # First, try to get driver updates specifically
         Write-Log "Searching for driver updates using PSWindowsUpdate module..." -Severity 'Info'
-        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsInstalled:$false -CategoryIds '268C95A1-F734-4526-8263-BDBC74C1F8CA' -ErrorAction Stop
+        $updates = Get-WindowsUpdate -MicrosoftUpdate -Category "Drivers" -ErrorAction Stop
 
         if ($updates.Count -gt 0) {
             Write-Log "Found $($updates.Count) driver updates:" -Severity 'Info'
@@ -271,14 +265,19 @@ function Install-Updates {
                 Write-Log "  - $($update.Title) (Size: ${sizeInMB}MB)" -Severity 'Info'
             }
 
-            Write-Log "Installing driver updates..." -Severity 'Info'
-            $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose:$false
+            # Collect KBArticleIDs to install only these updates
+            $kbList = $updates | ForEach-Object { $_.KBArticleID } | Where-Object { $_ } | Sort-Object -Unique
 
-            # Log installation results
-            if ($installResult) {
-                foreach ($result in $installResult) {
-                    $status = if ($result.Result -eq "Installed") { "Success" } else { "Failed" }
-                    Write-Log "Update result: $($result.Title) - $status" -Severity 'Info'
+            if ($kbList.Count -gt 0) {
+                Write-Log "Installing $($kbList.Count) specific driver updates..." -Severity 'Info'
+                $installResult = Install-WindowsUpdate -MicrosoftUpdate -KBArticleID $kbList -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose:$false
+
+                # Log installation results
+                if ($installResult) {
+                    foreach ($result in $installResult) {
+                        $status = if ($result.Result -eq "Installed") { "Success" } else { "Failed" }
+                        Write-Log "Update result: $($result.Title) - $status" -Severity 'Info'
+                    }
                 }
             }
 
