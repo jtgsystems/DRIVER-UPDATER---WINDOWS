@@ -30,7 +30,7 @@ function Write-Log {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] [$Severity] $Message"
     Write-Host $logEntry
-    
+
     try {
         # Rotate log if over size limit
         if (Test-Path $logFile -PathType Leaf) {
@@ -168,16 +168,16 @@ function Create-UpdateTask {
             $trigger = New-ScheduledTaskTrigger -AtStartup
             $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-            
+
             # Validate task parameters
             if (-not $action -or -not $trigger -or -not $principal) {
                 throw [UpdateException]::new("Scheduled task component creation failed")
             }
-            
+
             $task = Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action `
                 -Trigger $trigger -Principal $principal -Settings $settings `
                 -Description "Runs WindowsAutoUpdateScript at startup" -Force -ErrorAction Stop
-            
+
             Write-Log "Scheduled task created successfully. State: $($task.State)" -Severity 'Info'
         } catch {
             Write-Log "Failed to create scheduled task: $($_.Exception.Message)" -Severity 'Error'
@@ -321,7 +321,7 @@ function Install-UpdatesViaCOM {
         $updateSearcher = $updateSession.CreateUpdateSearcher()
 
         # Use better search criteria for driver updates
-        $searchCriteria = "IsInstalled=0 and Type='Driver'"
+        $searchCriteria = "IsInstalled=0 and CategoryIDs contains 'E6CF1350-C01B-414D-A61F-263D14D133B4'"
         Write-Log "Searching for driver updates using criteria: $searchCriteria" -Severity 'Info'
         $searchResult = $updateSearcher.Search($searchCriteria)
 
