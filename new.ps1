@@ -1,5 +1,5 @@
-# WindowsDriverUpdater_Fixed.ps1
-# Comprehensive driver and update management script with all critical issues resolved
+# WindowsComprehensiveUpdater.ps1
+# Comprehensive Windows update script that installs ALL available updates
 
 # Set execution policy for this session only
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force
@@ -26,7 +26,7 @@ $script:correlationId = [guid]::NewGuid().ToString()
 $global:ErrorActionPreference = 'Continue'  # Changed from Stop to Continue
 $scriptStartTime = Get-Date
 $script:isInteractive = [Environment]::UserInteractive -and [Environment]::GetCommandLineArgs() -notcontains '-NonInteractive'
-$script:updateMode = "Drivers"  # Options: "Drivers", "Critical", "All"
+$script:updateMode = "All"  # Default to ALL updates - Options: "Drivers", "Critical", "All"
 
 # State management object
 $script:state = @{
@@ -350,27 +350,27 @@ function Test-PendingReboot {
     return $rebootRequired
 }
 
-# Main driver update function using PSWindowsUpdate
-function Install-DriverUpdates {
-    Write-Log "Checking for driver updates..." -Severity 'Info'
+# Main Windows update function - installs ALL available updates
+function Install-AllWindowsUpdates {
+    Write-Log "Checking for ALL Windows updates..." -Severity 'Info'
 
     # Ensure module is loaded
     if (-not (Ensure-PSWindowsUpdateModule)) {
         Write-Log "PSWindowsUpdate module not available, using COM fallback" -Severity 'Warning'
-        return Install-DriverUpdatesViaCOM
+        return Install-AllWindowsUpdatesViaCOM
     }
 
     try {
-        # Get driver updates specifically
-        Write-Log "Searching for driver updates using PSWindowsUpdate..." -Severity 'Info'
-        $updates = Get-WindowsUpdate -CategoryIDs $DRIVER_CATEGORY_ID -IsHidden $false -ErrorAction Stop
+        # Get ALL available updates (not just drivers)
+        Write-Log "Searching for ALL Windows updates using PSWindowsUpdate..." -Severity 'Info'
+        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsHidden $false -ErrorAction Stop
 
         if ($updates.Count -eq 0) {
-            Write-Log "No driver updates available" -Severity 'Info'
+            Write-Log "No Windows updates available" -Severity 'Info'
             return @{ Success = $true; RebootRequired = $false; UpdateCount = 0 }
         }
 
-        Write-Log "Found $($updates.Count) driver updates:" -Severity 'Info'
+        Write-Log "Found $($updates.Count) Windows updates:" -Severity 'Info'
         foreach ($update in $updates) {
             $sizeInMB = if ($update.Size) { [math]::Round($update.Size / 1MB, 2) } else { "Unknown" }
             Write-Log "  - $($update.Title) (${sizeInMB}MB)" -Severity 'Info'
@@ -406,7 +406,7 @@ function Install-DriverUpdates {
             Save-ScriptState
         }
 
-        Write-Log "Driver update summary: $successCount succeeded, $failCount failed" -Severity 'Info'
+        Write-Log "Windows update summary: $successCount succeeded, $failCount failed" -Severity 'Info'
 
         return @{
             Success = $true
@@ -416,13 +416,13 @@ function Install-DriverUpdates {
     }
     catch {
         Write-Log "Error in PSWindowsUpdate method: $($_.Exception.Message)" -Severity 'Error'
-        return Install-DriverUpdatesViaCOM
+        return Install-AllWindowsUpdatesViaCOM
     }
 }
 
-# Fallback COM-based driver update function
-function Install-DriverUpdatesViaCOM {
-    Write-Log "Using COM interface for driver updates..." -Severity 'Info'
+# Fallback COM-based Windows update function for ALL updates
+function Install-AllWindowsUpdatesViaCOM {
+    Write-Log "Using COM interface for ALL Windows updates..." -Severity 'Info'
 
     $updateSession = $null
     $updateSearcher = $null
@@ -433,18 +433,18 @@ function Install-DriverUpdatesViaCOM {
         $updateSession = New-Object -ComObject Microsoft.Update.Session
         $updateSearcher = $updateSession.CreateUpdateSearcher()
 
-        # Search specifically for driver updates
-        $searchCriteria = "IsInstalled=0 and IsHidden=0 and CategoryIDs contains '$DRIVER_CATEGORY_ID'"
-        Write-Log "Searching for drivers with criteria: $searchCriteria" -Severity 'Info'
+        # Search for ALL available updates (not just drivers)
+        $searchCriteria = "IsInstalled=0 and IsHidden=0"
+        Write-Log "Searching for ALL updates with criteria: $searchCriteria" -Severity 'Info'
 
         $searchResult = $updateSearcher.Search($searchCriteria)
 
         if ($searchResult.Updates.Count -eq 0) {
-            Write-Log "No driver updates found via COM" -Severity 'Info'
+            Write-Log "No Windows updates found via COM" -Severity 'Info'
             return @{ Success = $true; RebootRequired = $false; UpdateCount = 0 }
         }
 
-        Write-Log "Found $($searchResult.Updates.Count) driver updates via COM" -Severity 'Info'
+        Write-Log "Found $($searchResult.Updates.Count) Windows updates via COM" -Severity 'Info'
 
         $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
         foreach ($update in $searchResult.Updates) {
@@ -454,7 +454,7 @@ function Install-DriverUpdatesViaCOM {
         }
 
         # Download updates
-        Write-Log "Downloading driver updates..." -Severity 'Info'
+        Write-Log "Downloading Windows updates..." -Severity 'Info'
         $downloader = $updateSession.CreateUpdateDownloader()
         $downloader.Updates = $updatesToInstall
         $downloadResult = $downloader.Download()
@@ -465,7 +465,7 @@ function Install-DriverUpdatesViaCOM {
         }
 
         # Install updates
-        Write-Log "Installing driver updates..." -Severity 'Info'
+        Write-Log "Installing Windows updates..." -Severity 'Info'
         $installer = $updateSession.CreateUpdateInstaller()
         $installer.Updates = $updatesToInstall
         $installResult = $installer.Install()
@@ -499,40 +499,37 @@ function Install-DriverUpdatesViaCOM {
     }
 }
 
-# Function to install critical Windows updates
-function Install-CriticalUpdates {
-    if ($script:updateMode -ne "All" -and $script:updateMode -ne "Critical") {
-        return @{ Success = $true; RebootRequired = $false }
+# Function to categorize and log update types
+function Get-UpdateCategories {
+    param($updates)
+
+    $categories = @{
+        Security = @()
+        Critical = @()
+        Drivers = @()
+        FeaturePacks = @()
+        QualityUpdates = @()
+        Other = @()
     }
 
-    Write-Log "Checking for critical Windows updates..." -Severity 'Info'
-
-    if (-not (Ensure-PSWindowsUpdateModule)) {
-        Write-Log "Cannot install critical updates without PSWindowsUpdate module" -Severity 'Warning'
-        return @{ Success = $false; RebootRequired = $false }
+    foreach ($update in $updates) {
+        if ($update.Categories -match "Security") { $categories.Security += $update }
+        elseif ($update.Categories -match "Critical") { $categories.Critical += $update }
+        elseif ($update.Categories -match "Drivers") { $categories.Drivers += $update }
+        elseif ($update.Categories -match "Feature") { $categories.FeaturePacks += $update }
+        elseif ($update.Categories -match "Quality|Rollup") { $categories.QualityUpdates += $update }
+        else { $categories.Other += $update }
     }
 
-    try {
-        # Get critical and security updates only
-        $updates = Get-WindowsUpdate -IsHidden $false -Severity @('Critical', 'Important') -ErrorAction Stop
+    Write-Log "Update breakdown:" -Severity 'Info'
+    Write-Log "  Security: $($categories.Security.Count)" -Severity 'Info'
+    Write-Log "  Critical: $($categories.Critical.Count)" -Severity 'Info'
+    Write-Log "  Drivers: $($categories.Drivers.Count)" -Severity 'Info'
+    Write-Log "  Feature Packs: $($categories.FeaturePacks.Count)" -Severity 'Info'
+    Write-Log "  Quality Updates: $($categories.QualityUpdates.Count)" -Severity 'Info'
+    Write-Log "  Other: $($categories.Other.Count)" -Severity 'Info'
 
-        if ($updates.Count -eq 0) {
-            Write-Log "No critical updates available" -Severity 'Info'
-            return @{ Success = $true; RebootRequired = $false }
-        }
-
-        Write-Log "Installing $($updates.Count) critical updates..." -Severity 'Info'
-        $result = Install-WindowsUpdate -KBArticleID $updates.KBArticleID -AcceptAll -IgnoreReboot
-
-        return @{
-            Success = $true
-            RebootRequired = Test-PendingReboot
-        }
-    }
-    catch {
-        Write-Log "Failed to install critical updates: $($_.Exception.Message)" -Severity 'Error'
-        return @{ Success = $false; RebootRequired = $false }
-    }
+    return $categories
 }
 
 # Selective WinGet update function
@@ -698,11 +695,8 @@ function Invoke-MainExecution {
         $steps += "Service Registration"
     }
 
-    $steps += "Driver Updates"
+    $steps += "Windows Updates"
 
-    if ($script:updateMode -eq "Critical" -or $script:updateMode -eq "All") {
-        $steps += "Critical Updates"
-    }
 
     if ($script:updateMode -eq "All") {
         $steps += "WinGet Updates"
@@ -748,33 +742,21 @@ function Invoke-MainExecution {
             Register-MicrosoftUpdateService | Out-Null
         }
 
-        # Step: Driver updates
+        # Step: Windows updates (ALL updates)
         $currentStep++
-        Show-Progress -Activity "Windows Update Process" -Status "Installing driver updates" `
+        Show-Progress -Activity "Windows Update Process" -Status "Installing ALL Windows updates" `
             -CurrentStep $currentStep -TotalSteps $totalSteps
 
-        $driverResult = Install-DriverUpdates
+        $updateResult = Install-AllWindowsUpdates
 
-        if ($driverResult.RebootRequired) {
-            Write-Log "Reboot required after driver updates" -Severity 'Info'
+        if ($updateResult.RebootRequired) {
+            Write-Log "Reboot required after Windows updates" -Severity 'Info'
             Invoke-SafeReboot
             return
         }
 
         # Step: Critical updates (if configured)
-        if ($script:updateMode -eq "Critical" -or $script:updateMode -eq "All") {
-            $currentStep++
-            Show-Progress -Activity "Windows Update Process" -Status "Installing critical updates" `
-                -CurrentStep $currentStep -TotalSteps $totalSteps
-
-            $criticalResult = Install-CriticalUpdates
-
-            if ($criticalResult.RebootRequired) {
-                Write-Log "Reboot required after critical updates" -Severity 'Info'
-                Invoke-SafeReboot
-                return
-            }
-        }
+        # Critical updates are already included in Install-AllWindowsUpdates when updateMode is "All"
 
         # Step: WinGet updates (if configured)
         if ($script:updateMode -eq "All") {
@@ -869,7 +851,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 # Main script execution
 try {
-    Write-Log "=== Windows Driver Updater Started ===" -Severity 'Info'
+    Write-Log "=== Windows Comprehensive Updater Started ===" -Severity 'Info'
     Write-Log "Correlation ID: $($script:correlationId)" -Severity 'Info'
     Write-Log "Update Mode: $($script:updateMode)" -Severity 'Info'
     Write-Log "Interactive Mode: $($script:isInteractive)" -Severity 'Info'

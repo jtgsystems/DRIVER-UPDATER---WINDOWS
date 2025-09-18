@@ -1,11 +1,11 @@
-# Windows Driver Updater
+# Windows Comprehensive Updater
 
-A comprehensive PowerShell script for automatically updating Windows drivers and system components with enterprise-grade error handling and automation support.
+A powerful PowerShell script that automatically installs ALL Windows updates including security updates, critical updates, drivers, feature packs, quality updates, and optional updates - plus WinGet packages and system integrity checks.
 
 ## 🚀 Features
 
 - **Automatic Admin Elevation**: Script automatically relaunches with administrator privileges
-- **Driver-Specific Updates**: Correctly filters and installs only driver updates using proper Windows Update API
+- **ALL Windows Updates**: Installs every available Windows update - security, critical, drivers, feature packs, quality updates, and optional updates
 - **State Persistence**: Tracks progress between reboots to prevent duplicate work
 - **Reboot Loop Prevention**: Maximum 5 reboot cycles with state tracking
 - **Non-Blocking Automation**: Detects interactive vs automated execution
@@ -17,18 +17,18 @@ A comprehensive PowerShell script for automatically updating Windows drivers and
 
 ## 📋 What Gets Updated
 
-### Driver Updates (Default Mode)
-- Display/Graphics drivers (NVIDIA, AMD, Intel)
-- Audio drivers (Realtek, etc.)
-- Network adapters
-- Chipset drivers
-- Storage controllers
-- All hardware drivers available through Windows Update
+### ALL Windows Updates (Default Mode = "All")
+- **Security Updates** - Critical security patches and vulnerability fixes
+- **Critical Updates** - System stability and reliability improvements
+- **Quality Updates** - Monthly rollups and cumulative updates
+- **Feature Updates** - Major Windows version updates (e.g., 22H2, 23H1)
+- **Driver Updates** - All hardware drivers (graphics, audio, network, chipset, etc.)
+- **Optional Updates** - Additional drivers, language packs, and features
+- **Microsoft Updates** - Office, .NET Framework, and other Microsoft products
 
-### Optional Components (Configurable)
-- Critical Windows security updates
-- WinGet packages (with exclusion list)
-- System integrity checks (SFC/DISM)
+### Additional Components (When updateMode = "All")
+- **WinGet Packages** - Desktop applications (with exclusion list support)
+- **System Integrity Checks** - SFC and DISM scans with 30-minute timeout
 
 ## 🔧 Requirements
 
@@ -47,7 +47,7 @@ A comprehensive PowerShell script for automatically updating Windows drivers and
 
 ### Command Line Execution
 ```powershell
-# Basic execution (drivers only)
+# Basic execution (ALL Windows updates by default)
 .\new.ps1
 
 # For automated/scheduled tasks
@@ -79,7 +79,7 @@ Edit these variables at the top of the script to customize behavior:
 
 ```powershell
 # Update mode - Options: "Drivers", "Critical", "All"
-$script:updateMode = "Drivers"
+$script:updateMode = "All"  # Default: installs ALL available Windows updates
 
 # Maximum reboot cycles (default: 5)
 $MAX_REBOOT_CYCLES = 5
@@ -107,13 +107,14 @@ This ensures you never miss important prompts that require your attention.
    - Verifies internet connectivity with timeout
    - Loads previous state if recovering from reboot
 
-2. **Driver Detection**
+2. **Update Detection**
    - Registers Microsoft Update Service
-   - Searches specifically for driver updates using category GUID
-   - Lists all available drivers with sizes
+   - Searches for ALL available Windows updates
+   - Categorizes updates: Security, Critical, Drivers, Feature Packs, Quality Updates
+   - Lists all available updates with sizes
 
 3. **Installation**
-   - Installs drivers one by one with progress tracking
+   - Installs ALL updates one by one with progress tracking
    - Saves state after each successful install
    - Falls back to COM interface if PSWindowsUpdate unavailable
 
@@ -153,8 +154,9 @@ This ensures you never miss important prompts that require your attention.
 
 ### Version 2.0 (Current)
 - Complete rewrite with all critical issues fixed
+- **Now installs ALL Windows updates, not just drivers**
 - Added state persistence and reboot loop prevention
-- Implemented proper driver-specific filtering
+- Includes all update categories: Security, Critical, Drivers, Feature Packs, Quality Updates
 - Added timeout protection for all operations
 - Fixed COM object cleanup and memory leaks
 - Added non-interactive mode for automation
