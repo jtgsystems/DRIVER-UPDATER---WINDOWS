@@ -1,11 +1,11 @@
 # Windows Comprehensive Updater
 
-A powerful PowerShell script that automatically installs ALL Windows updates including security updates, critical updates, drivers, feature packs, quality updates, and optional updates - plus WinGet packages and system integrity checks.
+A powerful PowerShell script that automatically installs ALL Windows updates including security updates, critical updates, drivers, feature packs, quality updates, optional updates, and third-party updates - plus WinGet packages and system integrity checks.
 
 ## 🚀 Features
 
 - **Automatic Admin Elevation**: Script automatically relaunches with administrator privileges
-- **ALL Windows Updates**: Installs every available Windows update - security, critical, drivers, feature packs, quality updates, and optional updates
+- **ALL Windows Updates**: Installs every available Windows update - security, critical, drivers, feature packs, quality updates, optional updates, and third-party updates
 - **State Persistence**: Tracks progress between reboots to prevent duplicate work
 - **Reboot Loop Prevention**: Maximum 5 reboot cycles with state tracking
 - **Non-Blocking Automation**: Detects interactive vs automated execution
@@ -25,6 +25,7 @@ A powerful PowerShell script that automatically installs ALL Windows updates inc
 - **Driver Updates** - All hardware drivers (graphics, audio, network, chipset, etc.)
 - **Optional Updates** - Additional drivers, language packs, and features
 - **Microsoft Updates** - Office, .NET Framework, and other Microsoft products
+- **Third-Party Updates** - Updates from hardware manufacturers and software vendors distributed through Windows Update
 
 ### Additional Components (When updateMode = "All")
 - **WinGet Packages** - Desktop applications (with exclusion list support)
@@ -108,9 +109,9 @@ This ensures you never miss important prompts that require your attention.
    - Loads previous state if recovering from reboot
 
 2. **Update Detection**
-   - Registers Microsoft Update Service
-   - Searches for ALL available Windows updates
-   - Categorizes updates: Security, Critical, Drivers, Feature Packs, Quality Updates
+   - Registers Microsoft Update Service (enables third-party updates)
+   - Searches for ALL available Windows updates including third-party
+   - Categorizes updates: Security, Critical, Drivers, Feature Packs, Quality Updates, Third-Party
    - Lists all available updates with sizes
 
 3. **Installation**
@@ -152,7 +153,13 @@ This ensures you never miss important prompts that require your attention.
 
 ## 📝 Version History
 
-### Version 2.0 (Current)
+### Version 2.1 (Current)
+- **Added third-party update support through Microsoft Update service**
+- Enhanced to detect and install updates from hardware manufacturers and software vendors
+- Improved categorization to identify third-party updates separately
+- Updated COM interface to explicitly use Microsoft Update service for third-party updates
+
+### Version 2.0
 - Complete rewrite with all critical issues fixed
 - **Now installs ALL Windows updates, not just drivers**
 - Added state persistence and reboot loop prevention

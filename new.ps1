@@ -237,9 +237,9 @@ function Ensure-PSWindowsUpdateModule {
     return $false
 }
 
-# Function to register Microsoft Update Service
+# Function to register Microsoft Update Service (includes third-party updates)
 function Register-MicrosoftUpdateService {
-    Write-Log "Registering Microsoft Update Service..." -Severity 'Info'
+    Write-Log "Registering Microsoft Update Service (includes third-party updates)..." -Severity 'Info'
     $serviceManager = $null
 
     try {
@@ -247,7 +247,9 @@ function Register-MicrosoftUpdateService {
         $service = $serviceManager.Services | Where-Object { $_.ServiceID -eq $MICROSOFT_UPDATE_SERVICE_ID }
 
         if (-not $service) {
-            Write-Log "Adding Microsoft Update Service..." -Severity 'Info'
+            Write-Log "Adding Microsoft Update Service for third-party updates..." -Severity 'Info'
+            # AddService2 with flags: 7 = asfAllowPendingRegistration | asfAllowOnlineRegistration | asfRegisterServiceWithAU
+            # This enables Microsoft Update which includes third-party updates
             $serviceManager.AddService2($MICROSOFT_UPDATE_SERVICE_ID, 7, "")
 
             # Poll for service registration
@@ -361,9 +363,10 @@ function Install-AllWindowsUpdates {
     }
 
     try {
-        # Get ALL available updates (not just drivers)
-        Write-Log "Searching for ALL Windows updates using PSWindowsUpdate..." -Severity 'Info'
-        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsHidden $false -ErrorAction Stop
+        # Get ALL available updates including third-party
+        Write-Log "Searching for ALL Windows updates including third-party using PSWindowsUpdate..." -Severity 'Info'
+        # -MicrosoftUpdate flag ensures we get updates from Microsoft Update service which includes third-party
+        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsHidden $false -AcceptAll -ErrorAction Stop
 
         if ($updates.Count -eq 0) {
             Write-Log "No Windows updates available" -Severity 'Info'
@@ -420,9 +423,9 @@ function Install-AllWindowsUpdates {
     }
 }
 
-# Fallback COM-based Windows update function for ALL updates
+# Fallback COM-based Windows update function for ALL updates including third-party
 function Install-AllWindowsUpdatesViaCOM {
-    Write-Log "Using COM interface for ALL Windows updates..." -Severity 'Info'
+    Write-Log "Using COM interface for ALL Windows updates including third-party..." -Severity 'Info'
 
     $updateSession = $null
     $updateSearcher = $null
@@ -433,9 +436,13 @@ function Install-AllWindowsUpdatesViaCOM {
         $updateSession = New-Object -ComObject Microsoft.Update.Session
         $updateSearcher = $updateSession.CreateUpdateSearcher()
 
-        # Search for ALL available updates (not just drivers)
+        # Ensure we're using Microsoft Update service for third-party updates
+        $updateSearcher.ServerSelection = 3  # 3 = ssOthers (Microsoft Update)
+        $updateSearcher.ServiceID = $MICROSOFT_UPDATE_SERVICE_ID
+
+        # Search for ALL available updates including third-party
         $searchCriteria = "IsInstalled=0 and IsHidden=0"
-        Write-Log "Searching for ALL updates with criteria: $searchCriteria" -Severity 'Info'
+        Write-Log "Searching for ALL updates including third-party with criteria: $searchCriteria" -Severity 'Info'
 
         $searchResult = $updateSearcher.Search($searchCriteria)
 
@@ -509,11 +516,21 @@ function Get-UpdateCategories {
         Drivers = @()
         FeaturePacks = @()
         QualityUpdates = @()
+        ThirdParty = @()
         Other = @()
     }
 
     foreach ($update in $updates) {
-        if ($update.Categories -match "Security") { $categories.Security += $update }
+        # Check for third-party updates (non-Microsoft updates)
+        $isThirdParty = $false
+        if ($update.PSObject.Properties.Name -contains "AutoSelectOnWebSites") {
+            $isThirdParty = -not $update.AutoSelectOnWebSites
+        }
+
+        if ($isThirdParty -or ($update.Categories -notmatch "Microsoft")) {
+            $categories.ThirdParty += $update
+        }
+        elseif ($update.Categories -match "Security") { $categories.Security += $update }
         elseif ($update.Categories -match "Critical") { $categories.Critical += $update }
         elseif ($update.Categories -match "Drivers") { $categories.Drivers += $update }
         elseif ($update.Categories -match "Feature") { $categories.FeaturePacks += $update }
@@ -527,6 +544,7 @@ function Get-UpdateCategories {
     Write-Log "  Drivers: $($categories.Drivers.Count)" -Severity 'Info'
     Write-Log "  Feature Packs: $($categories.FeaturePacks.Count)" -Severity 'Info'
     Write-Log "  Quality Updates: $($categories.QualityUpdates.Count)" -Severity 'Info'
+    Write-Log "  Third-Party: $($categories.ThirdParty.Count)" -Severity 'Info'
     Write-Log "  Other: $($categories.Other.Count)" -Severity 'Info'
 
     return $categories
