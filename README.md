@@ -1,228 +1,185 @@
-# 🔧 Windows Comprehensive Update Automator
+# Windows Driver Updater
 
-[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-success.svg)](https://www.microsoft.com/windows)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/graphs/commit-activity)
-[![JTG Systems](https://img.shields.io/badge/Developed%20by-JTG%20Systems-orange.svg)](https://jtgsystems.com)
+A comprehensive PowerShell script for automatically updating Windows drivers and system components with enterprise-grade error handling and automation support.
 
-**Developed by [Joint Technology Group](https://jointtechnologygroup.com) | Professional IT Solutions by [JTG Systems](https://jtgsystems.com)**
+## 🚀 Features
 
-> **The most comprehensive Windows update automation solution available** - Covers 95-98% of your Windows update ecosystem including Windows Updates, WinGet packages, Microsoft Store apps, security definitions, PowerShell modules, and system integrity validation.
+- **Automatic Admin Elevation**: Script automatically relaunches with administrator privileges
+- **Driver-Specific Updates**: Correctly filters and installs only driver updates using proper Windows Update API
+- **State Persistence**: Tracks progress between reboots to prevent duplicate work
+- **Reboot Loop Prevention**: Maximum 5 reboot cycles with state tracking
+- **Non-Blocking Automation**: Detects interactive vs automated execution
+- **Timeout Protection**: All long operations have configurable timeouts
+- **Selective Updates**: Configurable to update drivers only, critical updates, or everything
+- **Lock File Management**: Prevents multiple instances from running simultaneously
+- **Comprehensive Logging**: Detailed logging with automatic rotation at 5MB
+- **🎵 Darude Sandstorm Alerts**: Plays iconic beat pattern when user action is required (UAC prompts, exit confirmation)
 
-## 🚀 **What Makes This Special?**
+## 📋 What Gets Updated
 
-Unlike basic Windows update scripts that only handle Microsoft updates, this comprehensive solution manages **your entire Windows ecosystem**:
+### Driver Updates (Default Mode)
+- Display/Graphics drivers (NVIDIA, AMD, Intel)
+- Audio drivers (Realtek, etc.)
+- Network adapters
+- Chipset drivers
+- Storage controllers
+- All hardware drivers available through Windows Update
 
-- ✅ **Complete Coverage**: 8 different update categories in one automated solution
-- ✅ **Modern App Support**: WinGet packages, Microsoft Store apps, traditional Win32 applications
-- ✅ **Security First**: Windows Defender definitions, system integrity validation
-- ✅ **Enterprise Ready**: Multiple fallback methods, CIM integration, detailed logging
-- ✅ **Zero Interaction**: Fully automated with intelligent progress tracking
-- ✅ **Production Tested**: Enhanced by 14+ AI models for reliability and performance
+### Optional Components (Configurable)
+- Critical Windows security updates
+- WinGet packages (with exclusion list)
+- System integrity checks (SFC/DISM)
 
-## 📋 **Update Categories Covered**
+## 🔧 Requirements
 
-### Core Windows Updates
-- **Windows Security Updates** - Critical security patches
-- **Windows Critical Updates** - System stability fixes
-- **Windows Quality Updates** - Performance and reliability improvements
-- **Windows Feature Updates** - Major version updates (Windows 10/11)
-- **Driver Updates** - Hardware drivers and firmware
-- **Optional Updates** - Additional drivers and hardware-specific updates
-
-### Modern Application Ecosystem
-- **WinGet Package Manager** - Desktop applications (Chrome, VS Code, 7-Zip, etc.)
-- **Microsoft Store Apps** - Modern UWP/MSIX applications
-- **Windows Defender Definitions** - Real-time security signature updates
-- **PowerShell Modules** - Development environment maintenance
-- **System Integrity Checks** - SFC and DISM health validation
-
-## 🎯 **Quick Start**
-
-### Prerequisites
-- Windows 10 (build 10240+) or Windows 11
-- PowerShell 5.1 or later
-- Administrator privileges
+- Windows 10/11 (any edition)
+- PowerShell 5.1 or higher
 - Internet connection
+- Administrator privileges (script will auto-elevate)
 
-### One-Click Installation
-```powershell
-# Download and run (recommended for first-time users)
-Invoke-WebRequest -Uri "https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/raw/main/new.ps1" -OutFile "WindowsUpdater.ps1"
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force
-.\WindowsUpdater.ps1
-```
+## 💻 Usage
 
-### Advanced Usage
+### Simple Execution
+1. Right-click on `new.ps1`
+2. Select "Run with PowerShell"
+3. Approve the UAC prompt when Darude Sandstorm plays 🎵
+4. Script will automatically handle everything
+
+### Command Line Execution
 ```powershell
-# Clone repository for full documentation
-git clone https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS.git
-cd DRIVER-UPDATER---WINDOWS
+# Basic execution (drivers only)
 .\new.ps1
+
+# For automated/scheduled tasks
+powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "new.ps1"
 ```
 
-## 📊 **Execution Flow**
+### Scheduled Task Setup
+The script automatically creates a scheduled task if a reboot is required, ensuring updates continue after restart.
 
-The script follows an intelligent 11-step process with real-time progress tracking:
+## 🛡️ Safety Features
 
-1. **Administrative Privilege Check** - Ensures proper permissions
-2. **System Initialization** - Detects Windows version and configuration
-3. **Internet Connectivity Test** - Validates connection to update servers
-4. **PowerShell Module Installation** - Installs required PSWindowsUpdate module
-5. **Microsoft Update Service Registration** - Enables comprehensive update access
-6. **Windows System Updates** - Core OS updates, drivers, and optional updates
-7. **WinGet Package Updates** - Desktop application management
-8. **Microsoft Store App Updates** - Modern application ecosystem
-9. **Windows Defender Updates** - Security signature definitions
-10. **PowerShell Module Updates** - Development environment maintenance
-11. **System Integrity Validation** - Health checks and corruption detection
+- **No Infinite Loops**: Maximum 5 reboot cycles with state tracking
+- **Error Recovery**: Continues operation even if individual updates fail
+- **COM Object Cleanup**: Proper cleanup prevents memory leaks
+- **Internet Check**: Verifies connectivity before attempting updates
+- **Module Validation**: Ensures required PowerShell modules are available
+- **Timeout Protection**: 30-minute timeout on system scans (SFC/DISM)
+- **Lock File**: Prevents concurrent executions
 
-## 🔧 **Advanced Features**
+## 📁 Files Generated
 
-### Intelligent Error Handling
-- **Exponential Backoff Retry Logic** - Handles temporary service outages
-- **Multiple Update Pathways** - PSWindowsUpdate + COM API fallbacks
-- **Timeout Protection** - Prevents hanging on slow operations
-- **Memory Leak Prevention** - Proper COM object cleanup
+- `WindowsUpdateLog.txt` - Detailed log of all operations
+- `UpdateState.json` - Temporary state file (deleted after completion)
+- `UpdateScript.lock` - Lock file to prevent concurrent runs
 
-### Enterprise-Grade Logging
-- **Correlation ID Tracking** - Unique session identification
-- **Detailed Progress Reporting** - Real-time status updates
-- **Execution Time Metrics** - Performance monitoring
-- **Error Stack Trace Capture** - Advanced troubleshooting
+## ⚙️ Configuration
 
-### Platform Optimization
-- **Windows 10 Detection** - Optimized update handling for legacy systems
-- **Windows 11 Enhancement** - Latest feature update support
-- **Pending Reboot Management** - Intelligent restart coordination
-- **Scheduled Task Integration** - Post-reboot continuation
+Edit these variables at the top of the script to customize behavior:
 
-## 📈 **Performance & Reliability**
-
-### Tested Metrics
-- **Success Rate**: 95%+ across diverse Windows environments
-- **Coverage**: 95-98% of typical Windows update requirements
-- **Average Execution Time**: 15-45 minutes (depending on available updates)
-- **Memory Usage**: Optimized with proper COM cleanup
-- **Error Recovery**: Intelligent fallback mechanisms
-
-### AI-Enhanced Development
-This script has been enhanced through consultation with **14+ specialized AI models** including:
-- NVIDIA Nemotron (performance optimization)
-- Qwen3 Coder (code quality improvements)
-- DeepSeek V3.1 (reliability enhancements)
-- Mistral Small (error handling improvements)
-
-## 🛠️ **Troubleshooting**
-
-### Common Issues
-
-**Script requires administrator privileges**
 ```powershell
-# Right-click PowerShell and select "Run as Administrator"
-# Or use this command to elevate:
-Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+# Update mode - Options: "Drivers", "Critical", "All"
+$script:updateMode = "Drivers"
+
+# Maximum reboot cycles (default: 5)
+$MAX_REBOOT_CYCLES = 5
+
+# Timeout for SFC/DISM operations in minutes (default: 30)
+$SFC_DISM_TIMEOUT_MINUTES = 30
+
+# WinGet packages to exclude from updates
+$WINGET_EXCLUSIONS = @("PackageID1", "PackageID2")
 ```
 
-**PSWindowsUpdate module installation fails**
-```powershell
-# Manual installation
-Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
-Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser
-```
+## 🎵 Audio Notifications
 
-**Windows Update service not responding**
-```powershell
-# Reset Windows Update components
-net stop wuauserv
-net stop cryptSvc
-net stop bits
-net stop msiserver
-net start wuauserv
-net start cryptSvc
-net start bits
-net start msiserver
-```
+The script plays the Darude Sandstorm beat pattern when user interaction is required:
+- UAC elevation prompt
+- Script completion (when running interactively)
+- Any time user confirmation is needed
 
-### Log File Analysis
-Check the generated log file `WindowsUpdateLog.txt` for detailed execution information:
-- Correlation ID for session tracking
-- Detailed error messages with stack traces
-- Update installation results and reboot requirements
-- Performance metrics and execution timing
+This ensures you never miss important prompts that require your attention.
 
-## 🤝 **Contributing**
+## 🔍 How It Works
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+1. **Initialization**
+   - Checks for admin privileges (auto-elevates with 🎵 if needed)
+   - Verifies internet connectivity with timeout
+   - Loads previous state if recovering from reboot
 
-### Development Setup
-```powershell
-# Fork the repository
-git clone https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS.git
-cd DRIVER-UPDATER---WINDOWS
+2. **Driver Detection**
+   - Registers Microsoft Update Service
+   - Searches specifically for driver updates using category GUID
+   - Lists all available drivers with sizes
 
-# Create feature branch
-git checkout -b feature/your-enhancement
+3. **Installation**
+   - Installs drivers one by one with progress tracking
+   - Saves state after each successful install
+   - Falls back to COM interface if PSWindowsUpdate unavailable
 
-# Make changes and test thoroughly
-# Submit pull request with detailed description
-```
+4. **Reboot Handling**
+   - Checks for pending reboots
+   - Creates scheduled task for continuation
+   - Preserves state across reboots
+   - Resumes from last successful point
 
-## 📜 **License**
+5. **Cleanup**
+   - Removes scheduled task when complete
+   - Clears state file
+   - Archives logs if over 5MB
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## 🐛 Troubleshooting
 
-## ⭐ **Show Your Support**
+### Script Won't Run
+- Ensure execution policy allows scripts: `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`
+- Right-click and "Run with PowerShell" instead of double-clicking
 
-If this script has helped you maintain your Windows systems more effectively, please:
-- ⭐ Star this repository
-- 🐛 Report issues or suggest improvements
-- 🔗 Share with others who might benefit
-- 💡 Contribute enhancements or documentation improvements
+### Updates Not Found
+- Check `WindowsUpdateLog.txt` for detailed information
+- Ensure Windows Update service is running
+- Try running Windows Update manually first to sync catalog
 
-## 📞 **Support & Community**
+### Script Hangs
+- Check if SFC/DISM is running (can take 30+ minutes)
+- Look for lock file and delete if stale
+- Check Task Manager for PowerShell processes
 
-- 🐛 **Issues**: [GitHub Issues](https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS/discussions)
-- 🌐 **Professional Support**: [JTG Systems](https://jtgsystems.com) - Enterprise IT Solutions
-- 🏢 **Corporate Services**: [Joint Technology Group](https://jointtechnologygroup.com) - Technology Consulting
-- 📧 **Security**: Report security issues privately via email
+### Reboot Loop
+- Script automatically stops after 5 reboots
+- Delete `UpdateState.json` to reset counter
+- Check log for specific failing update
 
----
+## 📝 Version History
 
-## 🔍 **SEO Keyword Cloud**
+### Version 2.0 (Current)
+- Complete rewrite with all critical issues fixed
+- Added state persistence and reboot loop prevention
+- Implemented proper driver-specific filtering
+- Added timeout protection for all operations
+- Fixed COM object cleanup and memory leaks
+- Added non-interactive mode for automation
+- Dynamic progress tracking
+- Comprehensive error handling
+- Added Darude Sandstorm audio alerts for user actions
 
-**Primary Keywords**: Windows Update Automation, PowerShell Script, Windows 10 Updates, Windows 11 Updates, System Administration, IT Automation, Windows Maintenance, Update Management, Enterprise Windows, System Updates
+### Version 1.0 (Original)
+- Initial implementation
+- Basic update functionality
 
-**Secondary Keywords**: automatic windows updates, powershell update script, windows system maintenance, IT automation tools, windows patch management, enterprise update solution, windows security updates, driver update automation, windows store app updates, winget package manager, windows defender updates, system integrity check, windows update scheduler, automated system maintenance, windows admin tools
+## 📄 License
 
-**Long-tail Keywords**: comprehensive windows update automation script, enterprise windows update management solution, automated windows system maintenance powershell, windows 10 windows 11 complete update script, powershell windows update automation enterprise, windows security patch management automation, automated driver and system updates windows, complete windows ecosystem update solution, enterprise grade windows maintenance script, automated windows store and desktop app updates
+This script is provided as-is for internal use. Modify as needed for your environment.
 
-**Technical Keywords**: PSWindowsUpdate module, Microsoft Update Service, Windows Update Agent API, COM object automation, WinGet package manager integration, Microsoft Store app management, Windows Defender signature updates, PowerShell module management, System File Checker automation, DISM component store repair, scheduled task automation, registry pending reboot detection, exponential backoff retry logic, enterprise CIM integration
+## 🤝 Support
 
-**Industry Keywords**: system administrator tools, IT infrastructure automation, enterprise software deployment, windows fleet management, automated patch deployment, security compliance automation, system health monitoring, desktop management solution, endpoint management automation, windows infrastructure maintenance, corporate IT solutions, automated system updates enterprise
+For issues or improvements, check the logs at:
+- `WindowsUpdateLog.txt` in the script directory
 
-**Problem-solving Keywords**: fix windows update issues, automate windows maintenance, prevent windows update failures, streamline system administration, reduce IT workload, enterprise update compliance, automated security patching, system reliability improvement, minimize system downtime, comprehensive system monitoring, proactive system maintenance, automated troubleshooting tools
+## ⚠️ Important Notes
 
----
-
-## 🏢 **About the Developers**
-
-**[Joint Technology Group](https://jointtechnologygroup.com)** specializes in enterprise technology consulting and custom software solutions. We help businesses streamline their IT operations through intelligent automation and system optimization.
-
-**[JTG Systems](https://jtgsystems.com)** provides professional IT services including system administration, infrastructure management, and custom script development for Windows environments. Our expertise in PowerShell automation and enterprise system management ensures reliable, scalable solutions for organizations of all sizes.
-
-### Professional Services Available:
-- **Custom PowerShell Development** - Tailored automation scripts for your environment
-- **Enterprise System Management** - Large-scale Windows infrastructure optimization
-- **IT Automation Consulting** - Process improvement and efficiency enhancement
-- **System Integration Services** - Seamless technology ecosystem connectivity
-- **Managed IT Solutions** - Comprehensive technology support and maintenance
-
-*Contact us for professional implementation, customization, or enterprise support of this Windows update automation solution.*
-
----
-
-*🤖 Enhanced by AI-driven development and testing across multiple specialized models for maximum reliability and performance.*
+- This script is designed for drivers specifically, not general Windows updates
+- Always backup important data before running system updates
+- The script will automatically handle reboots when required
+- For production environments, test in a sandbox first
+- Logs are automatically rotated at 5MB to prevent disk space issues
+- Listen for Darude Sandstorm 🎵 to know when user action is needed

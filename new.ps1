@@ -1,27 +1,45 @@
-# WindowsComprehensiveUpdateScript.ps1
+# WindowsDriverUpdater_Fixed.ps1
+# Comprehensive driver and update management script with all critical issues resolved
 
-# Set execution policy to bypass for this session
+# Set execution policy for this session only
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force
 
-# Define log file path
+# Define paths and constants
 $scriptDir = $PSScriptRoot
 $logFile = Join-Path -Path $scriptDir -ChildPath "WindowsUpdateLog.txt"
+$stateFile = Join-Path -Path $scriptDir -ChildPath "UpdateState.json"
+$lockFile = Join-Path -Path $scriptDir -ChildPath "UpdateScript.lock"
 
-# Constants
+# Configuration Constants
 $MICROSOFT_UPDATE_SERVICE_ID = "7971f918-a847-4430-9279-4a52d1efe18d"
+$DRIVER_CATEGORY_ID = "E6CF1350-C01B-414D-A61F-263D14D133B4"  # Correct driver category GUID for Windows Update
 $MAX_LOG_SIZE = 5MB
-$MAX_RETRIES = 5
-$RETRY_DELAY = 15
-$TIMEOUT_MINUTES = 30
+$MAX_RETRIES = 3
+$MAX_REBOOT_CYCLES = 5  # Prevent infinite reboot loops
+$RETRY_DELAY = 10
+$INTERNET_CHECK_TIMEOUT = 5  # Seconds per server
+$SFC_DISM_TIMEOUT_MINUTES = 30
+$WINGET_EXCLUSIONS = @()  # Add package IDs to exclude from updates
 
-# Initialize debug tracking
+# Script configuration
 $script:correlationId = [guid]::NewGuid().ToString()
-$global:ErrorActionPreference = 'Stop'
+$global:ErrorActionPreference = 'Continue'  # Changed from Stop to Continue
 $scriptStartTime = Get-Date
+$script:isInteractive = [Environment]::UserInteractive -and [Environment]::GetCommandLineArgs() -notcontains '-NonInteractive'
+$script:updateMode = "Drivers"  # Options: "Drivers", "Critical", "All"
 
-class UpdateException : Exception { }
+# State management object
+$script:state = @{
+    CurrentPhase = "Initialization"
+    RebootCount = 0
+    CompletedSteps = @()
+    FailedUpdates = @()
+    SuccessfulUpdates = @()
+    LastRunTime = $null
+    CorrelationId = $script:correlationId
+}
 
-# Function to write to log file and console
+# Function to write to log with file locking
 function Write-Log {
     param (
         [string]$Message,
@@ -29,757 +47,869 @@ function Write-Log {
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] [$Severity] $Message"
-    Write-Host $logEntry
 
-    try {
-        # Rotate log if over size limit
-        if (Test-Path $logFile -PathType Leaf) {
-            $logSize = (Get-Item $logFile).Length
-            if ($logSize -gt $MAX_LOG_SIZE) {
-                $archivePath = Join-Path $scriptDir "WindowsUpdateLog_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-                Move-Item $logFile $archivePath -Force
+    # Display to console
+    $color = switch($Severity) {
+        'Error' { 'Red' }
+        'Warning' { 'Yellow' }
+        'Success' { 'Green' }
+        default { 'White' }
+    }
+    Write-Host $logEntry -ForegroundColor $color
+
+    # Write to file with retry logic
+    $retries = 3
+    while ($retries -gt 0) {
+        try {
+            # Rotate log if needed
+            if (Test-Path $logFile -PathType Leaf) {
+                $logSize = (Get-Item $logFile).Length
+                if ($logSize -gt $MAX_LOG_SIZE) {
+                    $archivePath = Join-Path $scriptDir "WindowsUpdateLog_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+                    Move-Item $logFile $archivePath -Force
+                }
             }
-        }
 
-        # Use stream writer for better performance
-        $stream = [System.IO.StreamWriter]::new($logFile, $true)
-        $stream.WriteLine("[$correlationId] $logEntry")
-        $stream.Close()
+            # Append to log file
+            Add-Content -Path $logFile -Value "[$correlationId] $logEntry" -ErrorAction Stop
+            break
+        }
+        catch {
+            $retries--
+            if ($retries -eq 0) {
+                Write-Host "Failed to write to log file: $($_.Exception.Message)" -ForegroundColor Red
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
+
+# Function to manage script state
+function Get-ScriptState {
+    if (Test-Path $stateFile) {
+        try {
+            $content = Get-Content $stateFile -Raw | ConvertFrom-Json
+            return $content
+        }
+        catch {
+            Write-Log "Failed to load state file: $($_.Exception.Message)" -Severity 'Warning'
+        }
+    }
+    return $script:state
+}
+
+function Save-ScriptState {
+    try {
+        $script:state.LastRunTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $script:state | ConvertTo-Json -Depth 10 | Set-Content $stateFile -Force
+        Write-Log "State saved successfully" -Severity 'Info'
     }
     catch {
-        Write-Host "Fatal logging error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Log "Failed to save state: $($_.Exception.Message)" -Severity 'Error'
     }
 }
 
-# Function to check internet connection with multiple servers
+function Clear-ScriptState {
+    try {
+        if (Test-Path $stateFile) {
+            Remove-Item $stateFile -Force
+            Write-Log "State file cleared" -Severity 'Info'
+        }
+    }
+    catch {
+        Write-Log "Failed to clear state file: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Function to prevent concurrent execution
+function Set-ScriptLock {
+    try {
+        $lockContent = @{
+            PID = $PID
+            StartTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            CorrelationId = $script:correlationId
+        }
+        $lockContent | ConvertTo-Json | Set-Content $lockFile -Force
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-ScriptLock {
+    if (Test-Path $lockFile) {
+        try {
+            $lock = Get-Content $lockFile -Raw | ConvertFrom-Json
+            $process = Get-Process -Id $lock.PID -ErrorAction SilentlyContinue
+            if ($process) {
+                Write-Log "Another instance is running (PID: $($lock.PID))" -Severity 'Warning'
+                return $true
+            }
+        }
+        catch {
+            # Lock file is invalid, remove it
+            Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return $false
+}
+
+function Remove-ScriptLock {
+    try {
+        if (Test-Path $lockFile) {
+            Remove-Item $lockFile -Force
+        }
+    }
+    catch {
+        Write-Log "Failed to remove lock file: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Optimized internet check with timeout
 function Check-Internet {
-    Write-Log "Checking for internet connection..." -Severity 'Info'
-    $testServers = @(
-        "update.microsoft.com",
-        "windowsupdate.microsoft.com",
-        "www.microsoft.com",
-        "8.8.8.8"
+    Write-Log "Checking internet connectivity..." -Severity 'Info'
+
+    $testUrls = @(
+        "http://www.msftconnecttest.com/connecttest.txt",
+        "http://www.google.com",
+        "http://www.microsoft.com"
     )
 
-    $connected = $false
-    foreach ($server in $testServers) {
+    foreach ($url in $testUrls) {
         try {
-            if (Test-NetConnection -ComputerName $server -InformationLevel Quiet -WarningAction SilentlyContinue) {
-                Write-Log "Internet connection confirmed via $server" -Severity 'Info'
-                $connected = $true
-                break
-            }
-        } catch {
-            Write-Log "Could not reach $server" -Severity 'Warning'
+            $request = [System.Net.HttpWebRequest]::Create($url)
+            $request.Timeout = $INTERNET_CHECK_TIMEOUT * 1000
+            $request.Method = "HEAD"
+            $response = $request.GetResponse()
+            $response.Close()
+            Write-Log "Internet connection confirmed via $url" -Severity 'Info'
+            return $true
+        }
+        catch {
+            continue
         }
     }
 
-    if (-not $connected) {
-        Write-Log "No internet connection detected. Please connect to the internet and run the script again." -Severity 'Error'
-        throw "Internet connection required for Windows Update operations"
-    }
+    Write-Log "No internet connection available" -Severity 'Error'
+    return $false
 }
 
-# Function to install required modules with exponential backoff
-function Install-RequiredModules {
-    Write-Log "Checking and installing required modules..." -Severity 'Info'
-    $retryCount = 0
-    while ($retryCount -lt $MAX_RETRIES) {
-        try {
-            if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
-                Write-Log "Installing NuGet package provider..." -Severity 'Info'
-                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop
-                Write-Log "Setting PSGallery as trusted repository..." -Severity 'Info'
-                Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop
-                Write-Log "Installing PSWindowsUpdate module..." -Severity 'Info'
-                Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
-                Write-Log "PSWindowsUpdate module installed successfully." -Severity 'Info'
-            } else {
-                Write-Log "PSWindowsUpdate module already available." -Severity 'Info'
-            }
-            # Verify module load capability
-            Import-Module PSWindowsUpdate -Force -ErrorAction Stop
-            $moduleVersion = (Get-Module PSWindowsUpdate).Version
-            Write-Log "PSWindowsUpdate module loaded successfully (Version: $moduleVersion)" -Severity 'Info'
-            return
-        } catch {
-            $retryCount++
-            $delaySeconds = [Math]::Min($RETRY_DELAY * [Math]::Pow(2, $retryCount - 1), 300) # Exponential backoff, max 5 minutes
-            Write-Log "Module installation attempt $retryCount failed: $($_.Exception.Message)" -Severity 'Warning'
-            if ($retryCount -ge $MAX_RETRIES) {
-                Write-Log "Failed to install PSWindowsUpdate module after $MAX_RETRIES attempts" -Severity 'Error'
-                throw
-            }
-            Write-Log "Retrying in $delaySeconds seconds..." -Severity 'Info'
-            Start-Sleep -Seconds $delaySeconds
+# Function to verify and load PSWindowsUpdate module
+function Ensure-PSWindowsUpdateModule {
+    try {
+        # Check if module is already loaded
+        if (Get-Module -Name PSWindowsUpdate) {
+            return $true
+        }
+
+        # Try to import module
+        Import-Module PSWindowsUpdate -Force -ErrorAction SilentlyContinue
+        if (Get-Module -Name PSWindowsUpdate) {
+            Write-Log "PSWindowsUpdate module loaded successfully" -Severity 'Info'
+            return $true
+        }
+
+        # Module not available, try to install
+        Write-Log "Installing PSWindowsUpdate module..." -Severity 'Info'
+
+        # Ensure NuGet provider
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser
+        }
+
+        # Set PSGallery as trusted
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+
+        # Install module
+        Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -AllowClobber
+
+        # Import and verify
+        Import-Module PSWindowsUpdate -Force
+        if (Get-Module -Name PSWindowsUpdate) {
+            Write-Log "PSWindowsUpdate module installed and loaded" -Severity 'Success'
+            return $true
         }
     }
+    catch {
+        Write-Log "Failed to ensure PSWindowsUpdate module: $($_.Exception.Message)" -Severity 'Error'
+    }
+    return $false
 }
 
-# Function to register Microsoft Update Service with proper COM cleanup
+# Function to register Microsoft Update Service
 function Register-MicrosoftUpdateService {
     Write-Log "Registering Microsoft Update Service..." -Severity 'Info'
     $serviceManager = $null
-    try {
-        $serviceManager = New-Object -ComObject Microsoft.Update.ServiceManager -ErrorAction Stop
-        if (-not $serviceManager) {
-            throw [UpdateException]::new("Failed to create ServiceManager COM object")
-        }
 
+    try {
+        $serviceManager = New-Object -ComObject Microsoft.Update.ServiceManager
         $service = $serviceManager.Services | Where-Object { $_.ServiceID -eq $MICROSOFT_UPDATE_SERVICE_ID }
+
         if (-not $service) {
-            Write-Log "Microsoft Update Service not found. Registering..." -Severity 'Info'
+            Write-Log "Adding Microsoft Update Service..." -Severity 'Info'
             $serviceManager.AddService2($MICROSOFT_UPDATE_SERVICE_ID, 7, "")
 
-            # Wait and verify service registration
-            Start-Sleep -Seconds 2
-            $newService = $serviceManager.Services | Where-Object { $_.ServiceID -eq $MICROSOFT_UPDATE_SERVICE_ID }
-            if (-not $newService) {
-                throw [UpdateException]::new("Service registration verification failed")
+            # Poll for service registration
+            $timeout = 30
+            $elapsed = 0
+            while ($elapsed -lt $timeout) {
+                Start-Sleep -Seconds 2
+                $elapsed += 2
+                $service = $serviceManager.Services | Where-Object { $_.ServiceID -eq $MICROSOFT_UPDATE_SERVICE_ID }
+                if ($service) {
+                    Write-Log "Microsoft Update Service registered successfully" -Severity 'Success'
+                    return $true
+                }
             }
-            Write-Log "Microsoft Update Service registered successfully. DisplayName: $($newService.Name)" -Severity 'Info'
-        } else {
-            Write-Log "Microsoft Update Service already registered. DisplayName: $($service.Name)" -Severity 'Info'
+            Write-Log "Timeout waiting for service registration" -Severity 'Warning'
         }
-    } catch {
-        Write-Log "Failed to register Microsoft Update Service: $($_.Exception.Message)" -Severity 'Error'
-        throw
-    } finally {
-        # Proper COM object cleanup
-        if ($serviceManager) {
-            try {
-                [System.Runtime.InteropServices.Marshal]::ReleaseComObject($serviceManager) | Out-Null
-                Write-Log "ServiceManager COM object released" -Severity 'Info'
-            } catch {
-                Write-Log "Warning: Could not release ServiceManager COM object: $($_.Exception.Message)" -Severity 'Warning'
-            }
+        else {
+            Write-Log "Microsoft Update Service already registered" -Severity 'Info'
+            return $true
         }
     }
+    catch {
+        Write-Log "Failed to register Microsoft Update Service: $($_.Exception.Message)" -Severity 'Error'
+    }
+    finally {
+        if ($serviceManager) {
+            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($serviceManager) | Out-Null
+        }
+    }
+    return $false
 }
 
-# Function to create scheduled task for post-reboot execution
+# Function to create scheduled task for post-reboot
 function Create-UpdateTask {
-    $taskName = "WindowsAutoUpdateScriptTask"
-    $taskPath = "\Microsoft\Windows\WindowsUpdate\"
-    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if (-not $task) {
-        try {
-            $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-            $trigger = New-ScheduledTaskTrigger -AtStartup
-            $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    $taskName = "WindowsDriverUpdaterTask"
 
-            # Validate task parameters
-            if (-not $action -or -not $trigger -or -not $principal) {
-                throw [UpdateException]::new("Scheduled task component creation failed")
-            }
-
-            $task = Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action `
-                -Trigger $trigger -Principal $principal -Settings $settings `
-                -Description "Runs WindowsAutoUpdateScript at startup" -Force -ErrorAction Stop
-
-            Write-Log "Scheduled task created successfully. State: $($task.State)" -Severity 'Info'
-        } catch {
-            Write-Log "Failed to create scheduled task: $($_.Exception.Message)" -Severity 'Error'
-            throw
+    try {
+        # Check if task already exists
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($existingTask) {
+            Write-Log "Scheduled task already exists" -Severity 'Info'
+            return $true
         }
+
+        # Create task with proper security context
+        $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -NonInteractive -File `"$PSCommandPath`""
+
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -RestartInterval (New-TimeSpan -Minutes 5) -RestartCount 3
+
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Principal $principal -Settings $settings -Force | Out-Null
+
+        Write-Log "Scheduled task created successfully" -Severity 'Success'
+        return $true
+    }
+    catch {
+        Write-Log "Failed to create scheduled task: $($_.Exception.Message)" -Severity 'Error'
+        return $false
     }
 }
 
 # Function to delete scheduled task
 function Delete-UpdateTask {
-    $taskName = "WindowsAutoUpdateScriptTask"
-    $taskPath = "\Microsoft\Windows\WindowsUpdate\"
-    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if ($task) {
-        try {
-            Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction Stop
-            Write-Log "Scheduled task deleted successfully." -Severity 'Info'
-        } catch {
-            Write-Log "Failed to delete scheduled task: $($_.Exception.Message)" -Severity 'Warning'
+    $taskName = "WindowsDriverUpdaterTask"
+
+    try {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($task) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+            Write-Log "Scheduled task removed" -Severity 'Info'
         }
+    }
+    catch {
+        Write-Log "Failed to remove scheduled task: $($_.Exception.Message)" -Severity 'Warning'
     }
 }
 
-# Function to test for pending reboot with corrected registry checks
+# Function to check for pending reboot
 function Test-PendingReboot {
-    try {
-        $rebootIndicators = @(
-            @{
-                TestType = "KeyExists"
-                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"
-                Description = "Component Based Servicing Reboot Pending"
-            },
-            @{
-                TestType = "KeyExists"
-                Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
-                Description = "Windows Update Reboot Required"
-            },
-            @{
-                TestType = "ValueExists"
-                Path = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                Name = "PendingFileRenameOperations"
-                Description = "Pending File Rename Operations"
-            }
-        )
+    $rebootRequired = $false
 
-        foreach ($indicator in $rebootIndicators) {
+    # Check Windows Update specific keys only
+    $updateKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"
+    )
+
+    foreach ($key in $updateKeys) {
+        if (Test-Path $key) {
+            Write-Log "Reboot required (Registry: $key)" -Severity 'Info'
+            $rebootRequired = $true
+            break
+        }
+    }
+
+    return $rebootRequired
+}
+
+# Main driver update function using PSWindowsUpdate
+function Install-DriverUpdates {
+    Write-Log "Checking for driver updates..." -Severity 'Info'
+
+    # Ensure module is loaded
+    if (-not (Ensure-PSWindowsUpdateModule)) {
+        Write-Log "PSWindowsUpdate module not available, using COM fallback" -Severity 'Warning'
+        return Install-DriverUpdatesViaCOM
+    }
+
+    try {
+        # Get driver updates specifically
+        Write-Log "Searching for driver updates using PSWindowsUpdate..." -Severity 'Info'
+        $updates = Get-WindowsUpdate -CategoryIDs $DRIVER_CATEGORY_ID -IsHidden $false -ErrorAction Stop
+
+        if ($updates.Count -eq 0) {
+            Write-Log "No driver updates available" -Severity 'Info'
+            return @{ Success = $true; RebootRequired = $false; UpdateCount = 0 }
+        }
+
+        Write-Log "Found $($updates.Count) driver updates:" -Severity 'Info'
+        foreach ($update in $updates) {
+            $sizeInMB = if ($update.Size) { [math]::Round($update.Size / 1MB, 2) } else { "Unknown" }
+            Write-Log "  - $($update.Title) (${sizeInMB}MB)" -Severity 'Info'
+        }
+
+        # Install updates one by one to track progress
+        $successCount = 0
+        $failCount = 0
+
+        foreach ($update in $updates) {
             try {
-                if ($indicator.TestType -eq "KeyExists") {
-                    if (Test-Path $indicator.Path) {
-                        Write-Log "Pending reboot detected: $($indicator.Description)" -Severity 'Warning'
-                        return $true
-                    }
-                } elseif ($indicator.TestType -eq "ValueExists") {
-                    $value = Get-ItemProperty -Path $indicator.Path -Name $indicator.Name -ErrorAction SilentlyContinue
-                    if ($value -and $value.($indicator.Name)) {
-                        Write-Log "Pending reboot detected: $($indicator.Description)" -Severity 'Warning'
-                        return $true
-                    }
+                Write-Log "Installing: $($update.Title)" -Severity 'Info'
+                $result = Install-WindowsUpdate -KBArticleID $update.KBArticleID -AcceptAll -IgnoreReboot -ErrorAction Stop
+
+                if ($result.Result -eq "Installed") {
+                    $successCount++
+                    $script:state.SuccessfulUpdates += $update.Title
+                    Write-Log "Successfully installed: $($update.Title)" -Severity 'Success'
                 }
-            } catch {
-                Write-Log "Could not check reboot indicator: $($indicator.Description) - $($_.Exception.Message)" -Severity 'Warning'
+                else {
+                    $failCount++
+                    $script:state.FailedUpdates += $update.Title
+                    Write-Log "Failed to install: $($update.Title)" -Severity 'Warning'
+                }
             }
+            catch {
+                $failCount++
+                $script:state.FailedUpdates += $update.Title
+                Write-Log "Error installing $($update.Title): $($_.Exception.Message)" -Severity 'Error'
+            }
+
+            # Save state after each update
+            Save-ScriptState
         }
 
-        Write-Log "No pending reboot detected." -Severity 'Info'
-        return $false
-    } catch {
-        Write-Log "Error checking pending reboot: $($_.Exception.Message)" -Severity 'Warning'
-        return $false
+        Write-Log "Driver update summary: $successCount succeeded, $failCount failed" -Severity 'Info'
+
+        return @{
+            Success = $true
+            RebootRequired = Test-PendingReboot
+            UpdateCount = $successCount
+        }
+    }
+    catch {
+        Write-Log "Error in PSWindowsUpdate method: $($_.Exception.Message)" -Severity 'Error'
+        return Install-DriverUpdatesViaCOM
     }
 }
 
-# Function to install all Windows updates and handle reboots
-function Install-Updates {
-    Write-Log "Checking for available Windows updates (all categories)..." -Severity 'Info'
-    try {
-        # Get ALL available updates including optional updates (drivers, firmware, etc.)
-        Write-Log "Searching for all Windows updates including optional updates using PSWindowsUpdate module..." -Severity 'Info'
-        $updates = Get-WindowsUpdate -MicrosoftUpdate -IsHidden $false -ErrorAction Stop
+# Fallback COM-based driver update function
+function Install-DriverUpdatesViaCOM {
+    Write-Log "Using COM interface for driver updates..." -Severity 'Info'
 
-        if ($updates.Count -gt 0) {
-            Write-Log "Found $($updates.Count) Windows updates:" -Severity 'Info'
-
-            # Categorize updates for better logging (including optional updates)
-            $securityUpdates = $updates | Where-Object { $_.Categories -match "Security Updates" }
-            $criticalUpdates = $updates | Where-Object { $_.Categories -match "Critical Updates" }
-            $driverUpdates = $updates | Where-Object { $_.Categories -match "Drivers" }
-            $featureUpdates = $updates | Where-Object { $_.Categories -match "Feature Packs|Upgrades" }
-            $qualityUpdates = $updates | Where-Object { $_.Categories -match "Update Rollups|Updates" }
-            $optionalUpdates = $updates | Where-Object { $_.Categories -match "Optional|Hardware" -or $_.IsOptional -eq $true }
-
-            Write-Log "Update breakdown: Security($($securityUpdates.Count)), Critical($($criticalUpdates.Count)), Drivers($($driverUpdates.Count)), Features($($featureUpdates.Count)), Quality($($qualityUpdates.Count)), Optional($($optionalUpdates.Count))" -Severity 'Info'
-
-            foreach ($update in $updates) {
-                $sizeInMB = if ($update.Size) { [math]::Round($update.Size / 1MB, 2) } else { "Unknown" }
-                $category = ($update.Categories -split ",")[0]
-                $optionalFlag = if ($update.IsOptional) { " [OPTIONAL]" } else { "" }
-                Write-Log "  - [$category] $($update.Title) (Size: ${sizeInMB}MB)$optionalFlag" -Severity 'Info'
-            }
-
-            Write-Log "Installing ALL $($updates.Count) Windows updates (including optional updates)..." -Severity 'Info'
-            $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IsHidden $false -IgnoreReboot -ErrorAction Stop -Verbose:$false
-
-            # Log installation results
-            if ($installResult) {
-                foreach ($result in $installResult) {
-                    $status = if ($result.Result -eq "Installed") { "Success" } else { "Failed" }
-                    Write-Log "Update result: $($result.Title) - $status" -Severity 'Info'
-                }
-            }
-
-            if (Test-PendingReboot) {
-                Write-Log "Reboot required after Windows updates. Creating scheduled task and rebooting..." -Severity 'Info'
-                Create-UpdateTask
-                Start-Sleep -Seconds 5  # Brief delay before reboot
-                Restart-Computer -Force
-            } else {
-                Write-Log "All Windows updates installed successfully. No reboot required." -Severity 'Info'
-            }
-        } else {
-            Write-Log "No Windows updates available via PSWindowsUpdate. Trying fallback method..." -Severity 'Info'
-            Install-UpdatesViaCOM
-        }
-    } catch {
-        Write-Log "Error installing updates with PSWindowsUpdate: $($_.Exception.Message)" -Severity 'Warning'
-        Write-Log "Falling back to COM interface..." -Severity 'Info'
-        Install-UpdatesViaCOM
-    } finally {
-        # Clean up if no reboot is pending
-        if (-not (Test-PendingReboot)) {
-            Write-Log "All Windows updates processed. Cleaning up and opening log..." -Severity 'Info'
-            Delete-UpdateTask
-            Open-LogFile
-        }
-    }
-}
-
-# Fallback function to install updates via COM with proper cleanup
-function Install-UpdatesViaCOM {
     $updateSession = $null
     $updateSearcher = $null
     $updatesToInstall = $null
     $installer = $null
 
     try {
-        Write-Log "Initializing Windows Update COM objects..." -Severity 'Info'
-        $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
+        $updateSession = New-Object -ComObject Microsoft.Update.Session
         $updateSearcher = $updateSession.CreateUpdateSearcher()
 
-        # Search for ALL available updates including optional (hidden=false)
-        $searchCriteria = "IsInstalled=0 and IsHidden=0"
-        Write-Log "Searching for all Windows updates including optional using criteria: $searchCriteria" -Severity 'Info'
+        # Search specifically for driver updates
+        $searchCriteria = "IsInstalled=0 and IsHidden=0 and CategoryIDs contains '$DRIVER_CATEGORY_ID'"
+        Write-Log "Searching for drivers with criteria: $searchCriteria" -Severity 'Info'
+
         $searchResult = $updateSearcher.Search($searchCriteria)
 
-        if ($searchResult.Updates.Count -gt 0) {
-            Write-Log "Found $($searchResult.Updates.Count) Windows updates via COM. Processing..." -Severity 'Info'
-
-            # Log update details including optional status
-            foreach ($update in $searchResult.Updates) {
-                $sizeInMB = [math]::Round($update.MaxDownloadSize / 1MB, 2)
-                $optionalFlag = if ($update.IsOptional) { " [OPTIONAL]" } else { "" }
-                Write-Log "  - $($update.Title) (Size: ${sizeInMB}MB)$optionalFlag" -Severity 'Info'
-            }
-
-            $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl -ErrorAction Stop
-            foreach ($update in $searchResult.Updates) {
-                if ($update.IsInstalled -eq $false) {
-                    $updatesToInstall.Add($update)
-                }
-            }
-
-            if ($updatesToInstall.Count -gt 0) {
-                $installer = $updateSession.CreateUpdateInstaller()
-                $installer.Updates = $updatesToInstall
-                Write-Log "Installing $($updatesToInstall.Count) driver updates..." -Severity 'Info'
-                $installResult = $installer.Install()
-
-                # Interpret result codes
-                $resultMessage = switch ($installResult.ResultCode) {
-                    0 { "Not Started" }
-                    1 { "In Progress" }
-                    2 { "Succeeded" }
-                    3 { "Succeeded with Errors" }
-                    4 { "Failed" }
-                    5 { "Aborted" }
-                    default { "Unknown ($($installResult.ResultCode))" }
-                }
-
-                Write-Log "COM update installation completed. Result: $resultMessage" -Severity 'Info'
-
-                if ($installResult.ResultCode -eq 2 -or $installResult.ResultCode -eq 3) {
-                    if (Test-PendingReboot) {
-                        Write-Log "Reboot required. Creating scheduled task and rebooting..." -Severity 'Info'
-                        Create-UpdateTask
-                        Restart-Computer -Force
-                    }
-                } else {
-                    Write-Log "Update installation failed or was incomplete" -Severity 'Warning'
-                }
-            } else {
-                Write-Log "No updates available for installation" -Severity 'Info'
-            }
-        } else {
-            Write-Log "No Windows updates available via COM." -Severity 'Info'
-            if (-not (Test-PendingReboot)) {
-                Write-Log "All updates installed and no reboot pending. Cleaning up and opening log..." -Severity 'Info'
-                Delete-UpdateTask
-                Open-LogFile
-            }
+        if ($searchResult.Updates.Count -eq 0) {
+            Write-Log "No driver updates found via COM" -Severity 'Info'
+            return @{ Success = $true; RebootRequired = $false; UpdateCount = 0 }
         }
-    } catch {
-        Write-Log "Failed to install updates via COM: $($_.Exception.Message)" -Severity 'Error'
-        Write-Log "Stack trace: $($_.ScriptStackTrace)" -Severity 'Error'
-    } finally {
-        # Proper COM object cleanup to prevent memory leaks
-        if ($installer) {
-            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($installer) | Out-Null } catch { }
+
+        Write-Log "Found $($searchResult.Updates.Count) driver updates via COM" -Severity 'Info'
+
+        $updatesToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
+        foreach ($update in $searchResult.Updates) {
+            $sizeInMB = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+            Write-Log "  - $($update.Title) (${sizeInMB}MB)" -Severity 'Info'
+            $updatesToInstall.Add($update) | Out-Null
         }
-        if ($updatesToInstall) {
-            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updatesToInstall) | Out-Null } catch { }
+
+        # Download updates
+        Write-Log "Downloading driver updates..." -Severity 'Info'
+        $downloader = $updateSession.CreateUpdateDownloader()
+        $downloader.Updates = $updatesToInstall
+        $downloadResult = $downloader.Download()
+
+        if ($downloadResult.ResultCode -ne 2) {
+            Write-Log "Download failed with code: $($downloadResult.ResultCode)" -Severity 'Error'
+            return @{ Success = $false; RebootRequired = $false; UpdateCount = 0 }
         }
-        if ($updateSearcher) {
-            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null } catch { }
+
+        # Install updates
+        Write-Log "Installing driver updates..." -Severity 'Info'
+        $installer = $updateSession.CreateUpdateInstaller()
+        $installer.Updates = $updatesToInstall
+        $installResult = $installer.Install()
+
+        $resultMessage = switch ($installResult.ResultCode) {
+            2 { "Succeeded" }
+            3 { "Succeeded with Errors" }
+            4 { "Failed" }
+            5 { "Aborted" }
+            default { "Unknown" }
         }
-        if ($updateSession) {
-            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null } catch { }
+
+        Write-Log "Installation result: $resultMessage" -Severity 'Info'
+
+        return @{
+            Success = ($installResult.ResultCode -eq 2 -or $installResult.ResultCode -eq 3)
+            RebootRequired = $installResult.RebootRequired
+            UpdateCount = $updatesToInstall.Count
         }
-        Write-Log "COM objects cleanup completed" -Severity 'Info'
+    }
+    catch {
+        Write-Log "COM update failed: $($_.Exception.Message)" -Severity 'Error'
+        return @{ Success = $false; RebootRequired = $false; UpdateCount = 0 }
+    }
+    finally {
+        # Clean up COM objects
+        if ($installer) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($installer) | Out-Null }
+        if ($updatesToInstall) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updatesToInstall) | Out-Null }
+        if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+        if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
     }
 }
 
-# Function to open the log file
-function Open-LogFile {
-    Write-Log "Opening log file: $logFile" -Severity 'Info'
+# Function to install critical Windows updates
+function Install-CriticalUpdates {
+    if ($script:updateMode -ne "All" -and $script:updateMode -ne "Critical") {
+        return @{ Success = $true; RebootRequired = $false }
+    }
+
+    Write-Log "Checking for critical Windows updates..." -Severity 'Info'
+
+    if (-not (Ensure-PSWindowsUpdateModule)) {
+        Write-Log "Cannot install critical updates without PSWindowsUpdate module" -Severity 'Warning'
+        return @{ Success = $false; RebootRequired = $false }
+    }
+
     try {
-        Invoke-Item -Path $logFile
-    } catch {
-        Write-Log "Failed to open log file: $($_.Exception.Message)" -Severity 'Error'
+        # Get critical and security updates only
+        $updates = Get-WindowsUpdate -IsHidden $false -Severity @('Critical', 'Important') -ErrorAction Stop
+
+        if ($updates.Count -eq 0) {
+            Write-Log "No critical updates available" -Severity 'Info'
+            return @{ Success = $true; RebootRequired = $false }
+        }
+
+        Write-Log "Installing $($updates.Count) critical updates..." -Severity 'Info'
+        $result = Install-WindowsUpdate -KBArticleID $updates.KBArticleID -AcceptAll -IgnoreReboot
+
+        return @{
+            Success = $true
+            RebootRequired = Test-PendingReboot
+        }
+    }
+    catch {
+        Write-Log "Failed to install critical updates: $($_.Exception.Message)" -Severity 'Error'
+        return @{ Success = $false; RebootRequired = $false }
     }
 }
 
-# Function to show progress with timeout
+# Selective WinGet update function
+function Update-WinGetPackages {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Log "WinGet not available" -Severity 'Info'
+        return
+    }
+
+    try {
+        Write-Log "Checking WinGet packages..." -Severity 'Info'
+
+        # Get list of available updates
+        $updates = winget upgrade --accept-source-agreements 2>&1
+        $updateList = $updates | Select-String -Pattern "^\S+\s+\S+\s+->\s+\S+" | ForEach-Object {
+            $parts = $_.Line -split '\s+'
+            $parts[0]  # Package ID
+        }
+
+        if ($updateList.Count -eq 0) {
+            Write-Log "No WinGet updates available" -Severity 'Info'
+            return
+        }
+
+        # Filter out excluded packages
+        $toUpdate = $updateList | Where-Object { $_ -notin $WINGET_EXCLUSIONS }
+
+        if ($toUpdate.Count -eq 0) {
+            Write-Log "All available updates are excluded" -Severity 'Info'
+            return
+        }
+
+        Write-Log "Updating $($toUpdate.Count) WinGet packages..." -Severity 'Info'
+
+        foreach ($package in $toUpdate) {
+            try {
+                Write-Log "Updating: $package" -Severity 'Info'
+                winget upgrade $package --silent --accept-package-agreements --accept-source-agreements
+            }
+            catch {
+                Write-Log "Failed to update $package : $($_.Exception.Message)" -Severity 'Warning'
+            }
+        }
+    }
+    catch {
+        Write-Log "WinGet update error: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Run system integrity check with timeout
+function Invoke-SystemIntegrityCheck {
+    if ($script:updateMode -ne "All") {
+        return
+    }
+
+    Write-Log "Running system integrity checks (timeout: $SFC_DISM_TIMEOUT_MINUTES minutes)..." -Severity 'Info'
+
+    # Run SFC with timeout
+    try {
+        $sfcJob = Start-Job -ScriptBlock {
+            sfc /scannow
+        }
+
+        if (Wait-Job -Job $sfcJob -Timeout ($SFC_DISM_TIMEOUT_MINUTES * 60)) {
+            $result = Receive-Job -Job $sfcJob
+            Write-Log "SFC scan completed" -Severity 'Success'
+        }
+        else {
+            Stop-Job -Job $sfcJob
+            Write-Log "SFC scan timed out after $SFC_DISM_TIMEOUT_MINUTES minutes" -Severity 'Warning'
+        }
+        Remove-Job -Job $sfcJob -Force
+    }
+    catch {
+        Write-Log "SFC scan error: $($_.Exception.Message)" -Severity 'Warning'
+    }
+
+    # Run DISM with timeout
+    try {
+        $dismJob = Start-Job -ScriptBlock {
+            DISM /Online /Cleanup-Image /RestoreHealth
+        }
+
+        if (Wait-Job -Job $dismJob -Timeout ($SFC_DISM_TIMEOUT_MINUTES * 60)) {
+            $result = Receive-Job -Job $dismJob
+            Write-Log "DISM scan completed" -Severity 'Success'
+        }
+        else {
+            Stop-Job -Job $dismJob
+            Write-Log "DISM scan timed out after $SFC_DISM_TIMEOUT_MINUTES minutes" -Severity 'Warning'
+        }
+        Remove-Job -Job $dismJob -Force
+    }
+    catch {
+        Write-Log "DISM scan error: $($_.Exception.Message)" -Severity 'Warning'
+    }
+}
+
+# Function to handle reboot with state preservation
+function Invoke-SafeReboot {
+    Write-Log "Preparing for system reboot..." -Severity 'Info'
+
+    # Increment reboot count
+    $script:state.RebootCount++
+
+    # Check if we've exceeded max reboots
+    if ($script:state.RebootCount -ge $MAX_REBOOT_CYCLES) {
+        Write-Log "Maximum reboot cycles ($MAX_REBOOT_CYCLES) reached. Stopping to prevent loop." -Severity 'Error'
+        Clear-ScriptState
+        Delete-UpdateTask
+        return $false
+    }
+
+    # Save current state
+    Save-ScriptState
+
+    # Ensure scheduled task exists
+    if (-not (Create-UpdateTask)) {
+        Write-Log "Failed to create scheduled task for post-reboot" -Severity 'Error'
+        return $false
+    }
+
+    Write-Log "Rebooting system (Reboot $($script:state.RebootCount) of $MAX_REBOOT_CYCLES)..." -Severity 'Info'
+
+    # Remove lock file before reboot
+    Remove-ScriptLock
+
+    # Initiate reboot
+    Restart-Computer -Force
+    exit 0
+}
+
+# Dynamic progress tracking
 function Show-Progress {
     param(
         [string]$Activity,
         [string]$Status,
-        [int]$PercentComplete = 0
-    )
-    Write-Progress -Activity $Activity -Status $Status -PercentComplete $PercentComplete
-    Write-Log "Progress: $Activity - $Status ($PercentComplete%)" -Severity 'Info'
-}
-
-# Function to run operations with timeout
-function Invoke-WithTimeout {
-    param(
-        [scriptblock]$ScriptBlock,
-        [int]$TimeoutMinutes = $TIMEOUT_MINUTES,
-        [string]$OperationName = "Operation"
+        [int]$CurrentStep,
+        [int]$TotalSteps
     )
 
-    Write-Log "Starting $OperationName with $TimeoutMinutes minute timeout" -Severity 'Info'
-    $job = Start-Job -ScriptBlock $ScriptBlock
-
-    try {
-        if (Wait-Job -Job $job -Timeout ($TimeoutMinutes * 60)) {
-            $result = Receive-Job -Job $job
-            Write-Log "$OperationName completed successfully" -Severity 'Info'
-            return $result
-        } else {
-            Write-Log "$OperationName timed out after $TimeoutMinutes minutes" -Severity 'Warning'
-            Stop-Job -Job $job
-            throw "Operation timeout: $OperationName"
-        }
-    } finally {
-        Remove-Job -Job $job -Force
+    if ($TotalSteps -gt 0) {
+        $percentComplete = [math]::Round(($CurrentStep / $TotalSteps) * 100)
+        Write-Progress -Activity $Activity -Status $Status -PercentComplete $percentComplete
+        Write-Log "$Status ($percentComplete%)" -Severity 'Info'
+    }
+    else {
+        Write-Progress -Activity $Activity -Status $Status
+        Write-Log $Status -Severity 'Info'
     }
 }
 
-# Function to update WinGet packages
-function Update-WinGetPackages {
-    try {
-        Write-Log "Checking for WinGet package updates..." -Severity 'Info'
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Log "WinGet found. Checking for available package updates..." -Severity 'Info'
+# Main execution wrapper with proper cleanup
+function Invoke-MainExecution {
+    $steps = @()
 
-            # Get list of upgradable packages
-            $wingetOutput = winget upgrade --source winget --disable-interactivity 2>&1
-            $wingetString = $wingetOutput | Out-String
+    # Build dynamic step list based on configuration
+    $steps += "Check Prerequisites"
+    $steps += "Internet Connectivity"
 
-            if ($wingetString -match "No available upgrades") {
-                Write-Log "No WinGet package updates available." -Severity 'Info'
-            } else {
-                Write-Log "WinGet package updates available. Installing..." -Severity 'Info'
-                $upgradeResult = winget upgrade --all --silent --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1
-                $upgradeString = $upgradeResult | Out-String
-
-                if ($upgradeString -match "Successfully installed") {
-                    Write-Log "WinGet packages updated successfully." -Severity 'Info'
-                } else {
-                    Write-Log "WinGet upgrade completed with mixed results. Check individual package status." -Severity 'Warning'
-                }
-            }
-        } else {
-            Write-Log "WinGet not available on this system. Skipping package updates." -Severity 'Warning'
-        }
-    } catch {
-        Write-Log "Error updating WinGet packages: $($_.Exception.Message)" -Severity 'Warning'
+    if ($script:state.CurrentPhase -ne "PostReboot") {
+        $steps += "Module Installation"
+        $steps += "Service Registration"
     }
-}
 
-# Function to update Microsoft Store apps
-function Update-StoreApps {
-    try {
-        Write-Log "Checking for Microsoft Store app updates..." -Severity 'Info'
-        if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
-            Write-Log "Triggering Microsoft Store app update scan..." -Severity 'Info'
+    $steps += "Driver Updates"
 
-            # Try to trigger Store app updates using CIM method
-            try {
-                $namespace = "Root\cimv2\mdm\dmmap"
-                $className = "MDM_EnterpriseModernAppManagement_AppManagement01"
-                $cimInstance = Get-CimInstance -Namespace $namespace -ClassName $className -ErrorAction SilentlyContinue
-
-                if ($cimInstance) {
-                    Invoke-CimMethod -CimInstance $cimInstance -MethodName UpdateScanMethod
-                    Write-Log "Store app update scan initiated via CIM." -Severity 'Info'
-                } else {
-                    Write-Log "CIM method not available. Trying PowerShell alternative..." -Severity 'Info'
-
-                    # Alternative method using PowerShell jobs
-                    $storeUpdateJob = Start-Job -ScriptBlock {
-                        try {
-                            # Try to force Store updates using ms-windows-store protocol
-                            Start-Process "ms-windows-store://downloadsandupdates" -ErrorAction SilentlyContinue
-                            Start-Sleep -Seconds 10
-
-                            # Get list of all user apps and check for updates
-                            $packages = Get-AppxPackage -AllUsers | Where-Object { $_.SignatureKind -eq 'Store' }
-                            return "Found $($packages.Count) Store packages"
-                        } catch {
-                            return "Error: $($_.Exception.Message)"
-                        }
-                    }
-
-                    $storeResult = Wait-Job -Job $storeUpdateJob -Timeout 30 | Receive-Job
-                    Remove-Job -Job $storeUpdateJob -Force
-                    Write-Log "Store update attempt: $storeResult" -Severity 'Info'
-                }
-            } catch {
-                Write-Log "Could not trigger Store app updates: $($_.Exception.Message)" -Severity 'Warning'
-            }
-        } else {
-            Write-Log "AppX packages not available on this system." -Severity 'Warning'
-        }
-    } catch {
-        Write-Log "Error updating Store apps: $($_.Exception.Message)" -Severity 'Warning'
+    if ($script:updateMode -eq "Critical" -or $script:updateMode -eq "All") {
+        $steps += "Critical Updates"
     }
-}
 
-# Function to update Windows Defender definitions
-function Update-DefenderDefinitions {
-    try {
-        Write-Log "Updating Windows Defender definitions..." -Severity 'Info'
-
-        # Check if Windows Defender is available
-        if (Get-Command Update-MpSignature -ErrorAction SilentlyContinue) {
-            Write-Log "Updating Windows Defender signature definitions..." -Severity 'Info'
-            Update-MpSignature -UpdateSource WindowsUpdate
-            Write-Log "Windows Defender definitions updated successfully." -Severity 'Info'
-
-            # Get current signature version
-            try {
-                $mpPreference = Get-MpPreference -ErrorAction SilentlyContinue
-                if ($mpPreference) {
-                    $signatureInfo = Get-MpComputerStatus -ErrorAction SilentlyContinue
-                    if ($signatureInfo) {
-                        Write-Log "Current Defender signature version: $($signatureInfo.AntivirusSignatureVersion)" -Severity 'Info'
-                        Write-Log "Last signature update: $($signatureInfo.AntivirusSignatureLastUpdated)" -Severity 'Info'
-                    }
-                }
-            } catch {
-                Write-Log "Could not retrieve Defender signature information: $($_.Exception.Message)" -Severity 'Warning'
-            }
-        } else {
-            Write-Log "Windows Defender PowerShell module not available. Trying alternative method..." -Severity 'Warning'
-
-            # Alternative method using MpCmdRun.exe
-            $mpCmdPath = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
-            if (Test-Path $mpCmdPath) {
-                Write-Log "Updating Defender definitions using MpCmdRun.exe..." -Severity 'Info'
-                $mpResult = Start-Process -FilePath $mpCmdPath -ArgumentList "-SignatureUpdate" -Wait -PassThru -NoNewWindow
-                if ($mpResult.ExitCode -eq 0) {
-                    Write-Log "Defender definitions updated successfully via MpCmdRun." -Severity 'Info'
-                } else {
-                    Write-Log "MpCmdRun returned exit code: $($mpResult.ExitCode)" -Severity 'Warning'
-                }
-            } else {
-                Write-Log "Windows Defender not found on this system." -Severity 'Warning'
-            }
-        }
-    } catch {
-        Write-Log "Error updating Defender definitions: $($_.Exception.Message)" -Severity 'Warning'
+    if ($script:updateMode -eq "All") {
+        $steps += "WinGet Updates"
+        $steps += "System Integrity"
     }
-}
 
-# Function to update PowerShell modules
-function Update-PowerShellModules {
-    try {
-        Write-Log "Checking for PowerShell module updates..." -Severity 'Info'
-
-        # Get all installed modules
-        $installedModules = Get-InstalledModule -ErrorAction SilentlyContinue
-
-        if ($installedModules) {
-            Write-Log "Found $($installedModules.Count) installed PowerShell modules. Checking for updates..." -Severity 'Info'
-
-            $outdatedModules = @()
-            foreach ($module in $installedModules) {
-                try {
-                    $latestVersion = Find-Module -Name $module.Name -ErrorAction SilentlyContinue
-                    if ($latestVersion -and ($latestVersion.Version -gt $module.Version)) {
-                        $outdatedModules += $module
-                        Write-Log "Module update available: $($module.Name) $($module.Version) -> $($latestVersion.Version)" -Severity 'Info'
-                    }
-                } catch {
-                    Write-Log "Could not check updates for module: $($module.Name)" -Severity 'Warning'
-                }
-            }
-
-            if ($outdatedModules.Count -gt 0) {
-                Write-Log "Updating $($outdatedModules.Count) PowerShell modules..." -Severity 'Info'
-                foreach ($module in $outdatedModules) {
-                    try {
-                        Write-Log "Updating module: $($module.Name)" -Severity 'Info'
-                        Update-Module -Name $module.Name -Force -AcceptLicense -ErrorAction Stop
-                        Write-Log "Successfully updated module: $($module.Name)" -Severity 'Info'
-                    } catch {
-                        Write-Log "Failed to update module $($module.Name): $($_.Exception.Message)" -Severity 'Warning'
-                    }
-                }
-            } else {
-                Write-Log "All PowerShell modules are up to date." -Severity 'Info'
-            }
-        } else {
-            Write-Log "No installed PowerShell modules found to update." -Severity 'Info'
-        }
-    } catch {
-        Write-Log "Error updating PowerShell modules: $($_.Exception.Message)" -Severity 'Warning'
-    }
-}
-
-# Function to perform system integrity checks
-function Invoke-SystemIntegrityCheck {
-    try {
-        Write-Log "Running system file integrity checks..." -Severity 'Info'
-
-        # Run SFC scan
-        Write-Log "Starting System File Checker (SFC) scan..." -Severity 'Info'
-        $sfcProcess = Start-Process -FilePath "sfc.exe" -ArgumentList "/scannow" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\sfc_output.txt"
-
-        if (Test-Path "$env:TEMP\sfc_output.txt") {
-            $sfcOutput = Get-Content "$env:TEMP\sfc_output.txt" -ErrorAction SilentlyContinue
-            if ($sfcOutput) {
-                $sfcResult = $sfcOutput | Select-String "Windows Resource Protection" | Select-Object -Last 1
-                if ($sfcResult) {
-                    Write-Log "SFC Result: $($sfcResult.Line)" -Severity 'Info'
-                }
-            }
-            Remove-Item "$env:TEMP\sfc_output.txt" -Force -ErrorAction SilentlyContinue
-        }
-
-        if ($sfcProcess.ExitCode -eq 0) {
-            Write-Log "System File Checker completed successfully." -Severity 'Info'
-        } else {
-            Write-Log "System File Checker returned exit code: $($sfcProcess.ExitCode)" -Severity 'Warning'
-        }
-
-        # Run DISM health check
-        Write-Log "Starting DISM component store health check..." -Severity 'Info'
-        try {
-            $dismProcess = Start-Process -FilePath "DISM.exe" -ArgumentList "/Online", "/Cleanup-Image", "/RestoreHealth" -Wait -PassThru -NoNewWindow
-            if ($dismProcess.ExitCode -eq 0) {
-                Write-Log "DISM health restoration completed successfully." -Severity 'Info'
-            } else {
-                Write-Log "DISM returned exit code: $($dismProcess.ExitCode)" -Severity 'Warning'
-            }
-        } catch {
-            Write-Log "Error running DISM: $($_.Exception.Message)" -Severity 'Warning'
-        }
-
-        Write-Log "System integrity checks completed." -Severity 'Info'
-    } catch {
-        Write-Log "Error during system integrity check: $($_.Exception.Message)" -Severity 'Warning'
-    }
-}
-
-# Main execution block with progress tracking
-try {
-    $totalSteps = 11  # Updated to include all new components
+    $totalSteps = $steps.Count
     $currentStep = 0
 
-    # Step 1: Check admin privileges
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Checking administrative privileges" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
+    try {
+        # Step: Prerequisites
+        $currentStep++
+        Show-Progress -Activity "Windows Update Process" -Status "Checking prerequisites" `
+            -CurrentStep $currentStep -TotalSteps $totalSteps
 
-    if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Log "Script not running with administrative privileges. Attempting to elevate..." -Severity 'Warning'
-        Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+        # Check for admin privileges (already done before this function)
+        Write-Log "Administrative privileges confirmed" -Severity 'Info'
+
+        # Step: Internet connectivity
+        $currentStep++
+        Show-Progress -Activity "Windows Update Process" -Status "Checking internet connection" `
+            -CurrentStep $currentStep -TotalSteps $totalSteps
+
+        if (-not (Check-Internet)) {
+            throw "No internet connection available"
+        }
+
+        # Step: Module installation (skip if post-reboot)
+        if ($script:state.CurrentPhase -ne "PostReboot") {
+            $currentStep++
+            Show-Progress -Activity "Windows Update Process" -Status "Installing required modules" `
+                -CurrentStep $currentStep -TotalSteps $totalSteps
+
+            Ensure-PSWindowsUpdateModule | Out-Null
+        }
+
+        # Step: Service registration (skip if post-reboot)
+        if ($script:state.CurrentPhase -ne "PostReboot") {
+            $currentStep++
+            Show-Progress -Activity "Windows Update Process" -Status "Registering update services" `
+                -CurrentStep $currentStep -TotalSteps $totalSteps
+
+            Register-MicrosoftUpdateService | Out-Null
+        }
+
+        # Step: Driver updates
+        $currentStep++
+        Show-Progress -Activity "Windows Update Process" -Status "Installing driver updates" `
+            -CurrentStep $currentStep -TotalSteps $totalSteps
+
+        $driverResult = Install-DriverUpdates
+
+        if ($driverResult.RebootRequired) {
+            Write-Log "Reboot required after driver updates" -Severity 'Info'
+            Invoke-SafeReboot
+            return
+        }
+
+        # Step: Critical updates (if configured)
+        if ($script:updateMode -eq "Critical" -or $script:updateMode -eq "All") {
+            $currentStep++
+            Show-Progress -Activity "Windows Update Process" -Status "Installing critical updates" `
+                -CurrentStep $currentStep -TotalSteps $totalSteps
+
+            $criticalResult = Install-CriticalUpdates
+
+            if ($criticalResult.RebootRequired) {
+                Write-Log "Reboot required after critical updates" -Severity 'Info'
+                Invoke-SafeReboot
+                return
+            }
+        }
+
+        # Step: WinGet updates (if configured)
+        if ($script:updateMode -eq "All") {
+            $currentStep++
+            Show-Progress -Activity "Windows Update Process" -Status "Updating applications" `
+                -CurrentStep $currentStep -TotalSteps $totalSteps
+
+            Update-WinGetPackages
+        }
+
+        # Step: System integrity (if configured)
+        if ($script:updateMode -eq "All") {
+            $currentStep++
+            Show-Progress -Activity "Windows Update Process" -Status "Running system integrity checks" `
+                -CurrentStep $currentStep -TotalSteps $totalSteps
+
+            Invoke-SystemIntegrityCheck
+        }
+
+        # Complete
+        Write-Progress -Activity "Windows Update Process" -Completed
+        Write-Log "=== Update Process Completed Successfully ===" -Severity 'Success'
+
+        # Show summary
+        Write-Log "`nUpdate Summary:" -Severity 'Info'
+        Write-Log "  Successful Updates: $($script:state.SuccessfulUpdates.Count)" -Severity 'Info'
+        Write-Log "  Failed Updates: $($script:state.FailedUpdates.Count)" -Severity 'Info'
+        Write-Log "  Reboot Cycles: $($script:state.RebootCount)" -Severity 'Info'
+
+        # Clean up
+        Clear-ScriptState
+        Delete-UpdateTask
+    }
+    catch {
+        Write-Log "Critical error: $($_.Exception.Message)" -Severity 'Error'
+        Write-Log "Stack trace: $($_.ScriptStackTrace)" -Severity 'Error'
+        Save-ScriptState
+    }
+    finally {
+        Write-Progress -Activity "Windows Update Process" -Completed
+        Remove-ScriptLock
+    }
+}
+
+# Function to play Darude Sandstorm beep pattern
+function Invoke-DarudeSandstorm {
+    # Darude Sandstorm beat pattern using console beeps
+    # Frequency and duration to recreate the iconic rhythm
+    $beepPattern = @(
+        @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100},
+        @{Freq=392; Dur=100}, @{Freq=392; Dur=100}, @{Freq=392; Dur=100}, @{Freq=392; Dur=100},
+        @{Freq=349; Dur=100}, @{Freq=349; Dur=100}, @{Freq=349; Dur=100}, @{Freq=349; Dur=100},
+        @{Freq=440; Dur=50}, @{Freq=440; Dur=50}, @{Freq=523; Dur=200},
+        @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100}
+    )
+
+    Write-Host "`n🎵 DARUDE SANDSTORM - USER ACTION REQUIRED! 🎵" -ForegroundColor Magenta
+
+    foreach ($beep in $beepPattern) {
+        try {
+            [Console]::Beep($beep.Freq, $beep.Dur)
+        }
+        catch {
+            # If beep fails, use system sound
+            [System.Media.SystemSounds]::Exclamation.Play()
+            break
+        }
+    }
+}
+
+# Check for admin privileges BEFORE any operations
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Invoke-DarudeSandstorm  # Play Darude Sandstorm for UAC prompt
+    Write-Host "Script requires administrator privileges. Relaunching as administrator..." -ForegroundColor Yellow
+    Write-Host "Please approve the User Account Control (UAC) prompt." -ForegroundColor Cyan
+
+    try {
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -NonInteractive -File `"$PSCommandPath`""
+        Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs -ErrorAction Stop
         exit
     }
-    Write-Log "Administrative privileges confirmed." -Severity 'Info'
+    catch {
+        Write-Host "`nFailed to elevate privileges: $($_.Exception.Message)" -ForegroundColor Red
 
-    # Step 2: Initialize
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Initializing script" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Write-Log "=== Windows Comprehensive Update Script Started ===" -Severity 'Info'
-    Write-Log "Correlation ID: $script:correlationId" -Severity 'Info'
-    Write-Log "Script Path: $PSCommandPath" -Severity 'Info'
-    Write-Log "Log File: $logFile" -Severity 'Info'
+        if ($script:isInteractive) {
+            Write-Host "`nPress any key to exit..." -ForegroundColor Cyan
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        }
+        exit 1
+    }
+}
 
-    # Detect Windows version for full OS updates
-    $osVersion = Get-CimInstance -ClassName Win32_OperatingSystem
-    $windowsVersion = $osVersion.Caption
-    $buildNumber = $osVersion.BuildNumber
-    Write-Log "Detected OS: $windowsVersion (Build: $buildNumber)" -Severity 'Info'
+# Main script execution
+try {
+    Write-Log "=== Windows Driver Updater Started ===" -Severity 'Info'
+    Write-Log "Correlation ID: $($script:correlationId)" -Severity 'Info'
+    Write-Log "Update Mode: $($script:updateMode)" -Severity 'Info'
+    Write-Log "Interactive Mode: $($script:isInteractive)" -Severity 'Info'
 
-    if ($buildNumber -ge 22000) {
-        Write-Log "Windows 11 detected - will ensure full Windows 11 updates including feature updates" -Severity 'Info'
-    } elseif ($buildNumber -ge 10240) {
-        Write-Log "Windows 10 detected - will ensure full Windows 10 updates including feature updates" -Severity 'Info'
-    } else {
-        Write-Log "Older Windows version detected - will install available updates" -Severity 'Info'
+    # Check for concurrent execution
+    if (Test-ScriptLock) {
+        Write-Log "Another instance is already running. Exiting." -Severity 'Warning'
+        exit 0
     }
 
-    # Step 3: Check internet connection
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Checking internet connectivity" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Check-Internet
+    # Set lock
+    Set-ScriptLock | Out-Null
 
-    # Step 4: Install required modules
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Installing required PowerShell modules" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Install-RequiredModules
+    # Load previous state if exists
+    $previousState = Get-ScriptState
+    if ($previousState.RebootCount -gt 0) {
+        Write-Log "Resuming after reboot (Reboot count: $($previousState.RebootCount))" -Severity 'Info'
+        $script:state = $previousState
+        $script:state.CurrentPhase = "PostReboot"
+    }
 
-    # Step 5: Register Microsoft Update Service
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Registering Microsoft Update Service" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Register-MicrosoftUpdateService
-
-    # Step 6: Install Windows updates
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Searching and installing all Windows updates" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Install-Updates
-
-    # Step 7: Update WinGet packages
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating WinGet packages" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Update-WinGetPackages
-
-    # Step 8: Update Microsoft Store apps
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating Microsoft Store applications" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Update-StoreApps
-
-    # Step 9: Update Windows Defender definitions
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating Windows Defender definitions" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Update-DefenderDefinitions
-
-    # Step 10: Update PowerShell modules
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Updating PowerShell modules" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Update-PowerShellModules
-
-    # Step 11: System integrity checks
-    $currentStep++
-    Show-Progress -Activity "Windows Comprehensive Updater" -Status "Running system integrity checks" -PercentComplete ([math]::Round(($currentStep / $totalSteps) * 100))
-    Invoke-SystemIntegrityCheck
-
-    # Complete
-    Write-Progress -Activity "Windows Comprehensive Updater" -Status "Completed" -PercentComplete 100
-    Write-Log "=== Windows Comprehensive Update Script Completed Successfully ===" -Severity 'Info'
-    Write-Log "Summary: All update categories processed - Windows Updates, WinGet packages, Store apps, Defender definitions, PowerShell modules, and system integrity checks." -Severity 'Info'
-
-} catch {
-    Write-Log "=== CRITICAL ERROR ===" -Severity 'Error'
+    # Execute main logic
+    Invoke-MainExecution
+}
+catch {
+    Write-Log "=== FATAL ERROR ===" -Severity 'Error'
     Write-Log "Error: $($_.Exception.Message)" -Severity 'Error'
-    Write-Log "Stack Trace: $($_.ScriptStackTrace)" -Severity 'Error'
-    Write-Log "Correlation ID: $script:correlationId" -Severity 'Error'
+    Write-Log "Stack: $($_.ScriptStackTrace)" -Severity 'Error'
+}
+finally {
+    Remove-ScriptLock
 
-    # Try to open log file on error
-    try {
-        Open-LogFile
-    } catch {
-        Write-Host "Could not open log file: $($_.Exception.Message)" -ForegroundColor Red
+    $executionTime = [math]::Round(((Get-Date) - $scriptStartTime).TotalMinutes, 2)
+    Write-Log "Execution time: $executionTime minutes" -Severity 'Info'
+    Write-Log "Log file: $logFile" -Severity 'Info'
+
+    # Only prompt if interactive and not scheduled task
+    if ($script:isInteractive -and -not $env:TASK_SCHEDULER) {
+        Invoke-DarudeSandstorm  # Play Darude Sandstorm when waiting for user
+        Write-Host "`nPress any key to exit..." -ForegroundColor Cyan
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     }
-} finally {
-    Write-Progress -Activity "Windows Comprehensive Updater" -Completed
-    Write-Host "`n=== Script Execution Summary ===" -ForegroundColor Cyan
-    Write-Host "Log File: $logFile" -ForegroundColor White
-    Write-Host "Correlation ID: $script:correlationId" -ForegroundColor White
-    Write-Host "Execution Time: $([math]::Round(((Get-Date) - $scriptStartTime).TotalMinutes, 2)) minutes" -ForegroundColor White
-    Write-Host "`nPress any key to exit..." -ForegroundColor Cyan
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }
