@@ -18,7 +18,7 @@ $MAX_RETRIES = 3
 $MAX_REBOOT_CYCLES = 5  # Prevent infinite reboot loops
 $RETRY_DELAY = 10
 $INTERNET_CHECK_TIMEOUT = 5  # Seconds per server
-$SFC_DISM_TIMEOUT_MINUTES = 30
+# SFC/DISM removed for performance (was taking 30+ minutes)
 $WINGET_EXCLUSIONS = @()  # Add package IDs to exclude from updates
 
 # Script configuration
@@ -597,54 +597,8 @@ function Update-WinGetPackages {
     }
 }
 
-# Run system integrity check with timeout
-function Invoke-SystemIntegrityCheck {
-    if ($script:updateMode -ne "All") {
-        return
-    }
-
-    Write-Log "Running system integrity checks (timeout: $SFC_DISM_TIMEOUT_MINUTES minutes)..." -Severity 'Info'
-
-    # Run SFC with timeout
-    try {
-        $sfcJob = Start-Job -ScriptBlock {
-            sfc /scannow
-        }
-
-        if (Wait-Job -Job $sfcJob -Timeout ($SFC_DISM_TIMEOUT_MINUTES * 60)) {
-            $result = Receive-Job -Job $sfcJob
-            Write-Log "SFC scan completed" -Severity 'Success'
-        }
-        else {
-            Stop-Job -Job $sfcJob
-            Write-Log "SFC scan timed out after $SFC_DISM_TIMEOUT_MINUTES minutes" -Severity 'Warning'
-        }
-        Remove-Job -Job $sfcJob -Force
-    }
-    catch {
-        Write-Log "SFC scan error: $($_.Exception.Message)" -Severity 'Warning'
-    }
-
-    # Run DISM with timeout
-    try {
-        $dismJob = Start-Job -ScriptBlock {
-            DISM /Online /Cleanup-Image /RestoreHealth
-        }
-
-        if (Wait-Job -Job $dismJob -Timeout ($SFC_DISM_TIMEOUT_MINUTES * 60)) {
-            $result = Receive-Job -Job $dismJob
-            Write-Log "DISM scan completed" -Severity 'Success'
-        }
-        else {
-            Stop-Job -Job $dismJob
-            Write-Log "DISM scan timed out after $SFC_DISM_TIMEOUT_MINUTES minutes" -Severity 'Warning'
-        }
-        Remove-Job -Job $dismJob -Force
-    }
-    catch {
-        Write-Log "DISM scan error: $($_.Exception.Message)" -Severity 'Warning'
-    }
-}
+# System integrity check function removed for performance
+# SFC/DISM scans were taking 30+ minutes and slowing down the update process
 
 # Function to handle reboot with state preservation
 function Invoke-SafeReboot {
@@ -718,7 +672,6 @@ function Invoke-MainExecution {
 
     if ($script:updateMode -eq "All") {
         $steps += "WinGet Updates"
-        $steps += "System Integrity"
     }
 
     $totalSteps = $steps.Count
@@ -785,14 +738,7 @@ function Invoke-MainExecution {
             Update-WinGetPackages
         }
 
-        # Step: System integrity (if configured)
-        if ($script:updateMode -eq "All") {
-            $currentStep++
-            Show-Progress -Activity "Windows Update Process" -Status "Running system integrity checks" `
-                -CurrentStep $currentStep -TotalSteps $totalSteps
-
-            Invoke-SystemIntegrityCheck
-        }
+        # System integrity check removed - was too slow (30+ minutes)
 
         # Complete
         Write-Progress -Activity "Windows Update Process" -Completed

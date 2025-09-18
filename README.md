@@ -1,6 +1,6 @@
 # Windows Comprehensive Updater
 
-A powerful PowerShell script that automatically installs ALL Windows updates including security updates, critical updates, drivers, feature packs, quality updates, optional updates, and third-party updates - plus WinGet packages and system integrity checks.
+A powerful PowerShell script that automatically installs ALL Windows updates including security updates, critical updates, drivers, feature packs, quality updates, optional updates, and third-party updates - plus WinGet packages.
 
 ## 🚀 Features
 
@@ -9,7 +9,7 @@ A powerful PowerShell script that automatically installs ALL Windows updates inc
 - **State Persistence**: Tracks progress between reboots to prevent duplicate work
 - **Reboot Loop Prevention**: Maximum 5 reboot cycles with state tracking
 - **Non-Blocking Automation**: Detects interactive vs automated execution
-- **Timeout Protection**: All long operations have configurable timeouts
+- **Timeout Protection**: Long operations properly handled
 - **Selective Updates**: Configurable to update drivers only, critical updates, or everything
 - **Lock File Management**: Prevents multiple instances from running simultaneously
 - **Comprehensive Logging**: Detailed logging with automatic rotation at 5MB
@@ -29,7 +29,6 @@ A powerful PowerShell script that automatically installs ALL Windows updates inc
 
 ### Additional Components (When updateMode = "All")
 - **WinGet Packages** - Desktop applications (with exclusion list support)
-- **System Integrity Checks** - SFC and DISM scans with 30-minute timeout
 
 ## 🔧 Requirements
 
@@ -85,9 +84,6 @@ $script:updateMode = "All"  # Default: installs ALL available Windows updates
 # Maximum reboot cycles (default: 5)
 $MAX_REBOOT_CYCLES = 5
 
-# Timeout for SFC/DISM operations in minutes (default: 30)
-$SFC_DISM_TIMEOUT_MINUTES = 30
-
 # WinGet packages to exclude from updates
 $WINGET_EXCLUSIONS = @("PackageID1", "PackageID2")
 ```
@@ -142,9 +138,9 @@ This ensures you never miss important prompts that require your attention.
 - Try running Windows Update manually first to sync catalog
 
 ### Script Hangs
-- Check if SFC/DISM is running (can take 30+ minutes)
 - Look for lock file and delete if stale
 - Check Task Manager for PowerShell processes
+- Check if Windows Update is downloading large updates
 
 ### Reboot Loop
 - Script automatically stops after 5 reboots
@@ -158,6 +154,7 @@ This ensures you never miss important prompts that require your attention.
 - Enhanced to detect and install updates from hardware manufacturers and software vendors
 - Improved categorization to identify third-party updates separately
 - Updated COM interface to explicitly use Microsoft Update service for third-party updates
+- **Removed system integrity checks (SFC/DISM)** - Was too slow (30+ minutes timeout)
 
 ### Version 2.0
 - Complete rewrite with all critical issues fixed
