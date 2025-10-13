@@ -12,6 +12,8 @@ $lockFile = Join-Path -Path $scriptDir -ChildPath "UpdateScript.lock"
 $diagnosticLogFile = Join-Path -Path $scriptDir -ChildPath "DiagnosticReport.txt"
 
 # Configuration Constants
+# Microsoft Update Service ID - enables updates for Microsoft products beyond Windows
+# Reference: https://learn.microsoft.com/windows/win32/wua_sdk/opt-in-to-microsoft-update
 $MICROSOFT_UPDATE_SERVICE_ID = "7971f918-a847-4430-9279-4a52d1efe18d"
 $DRIVER_CATEGORY_ID = "E6CF1350-C01B-414D-A61F-263D14D133B4"
 $MAX_LOG_SIZE = 5MB
@@ -402,14 +404,16 @@ function Repair-WindowsUpdateComponents {
         }
 
         # Re-register DLLs
+        # Reference: https://support.microsoft.com/topic/how-to-use-the-regsvr32-tool-and-troubleshoot-regsvr32-error-messages-a98d960a-7392-e6fe-d90a-3f4e0cb543e5
+        # Note: wuaueng.dll and qmgr.dll are intentionally excluded - they don't export DllRegisterServer
+        # Reference: https://learn.microsoft.com/troubleshoot/windows-client/installing-updates-features-roles/additional-resources-for-windows-update
         Write-Log "Re-registering Windows Update DLLs..." -Severity 'Info'
         $dlls = @('atl.dll', 'urlmon.dll', 'mshtml.dll', 'shdocvw.dll', 'browseui.dll',
                   'jscript.dll', 'vbscript.dll', 'scrrun.dll', 'msxml.dll', 'msxml3.dll',
                   'msxml6.dll', 'actxprxy.dll', 'softpub.dll', 'wintrust.dll', 'dssenh.dll',
                   'rsaenh.dll', 'gpkcsp.dll', 'sccbase.dll', 'slbcsp.dll', 'cryptdlg.dll',
                   'oleaut32.dll', 'ole32.dll', 'shell32.dll', 'initpki.dll', 'wuapi.dll',
-                  'wuaueng.dll', 'wuaueng1.dll', 'wucltui.dll', 'wups.dll', 'wups2.dll',
-                  'wuweb.dll', 'qmgr.dll', 'qmgrprxy.dll', 'wucltux.dll', 'muweb.dll', 'wuwebv.dll')
+                  'wucltui.dll', 'wups.dll', 'wups2.dll', 'wuweb.dll', 'wucltux.dll', 'muweb.dll', 'wuwebv.dll')
 
         foreach ($dll in $dlls) {
             Start-Process -FilePath "regsvr32.exe" -ArgumentList "/s $dll" -Wait -NoNewWindow -ErrorAction SilentlyContinue
@@ -531,6 +535,8 @@ function Register-MicrosoftUpdateService {
 
         if (-not $service) {
             Write-Log "Adding Microsoft Update Service..." -Severity 'Info'
+            # AddService2 flags: 7 = asfAllowPendingRegistration (1) | asfAllowOnlineRegistration (2) | asfRegisterServiceWithAU (4)
+            # Reference: https://learn.microsoft.com/windows/win32/api/wuapi/nf-wuapi-iupdateservicemanager2-addservice2
             $serviceManager.AddService2($MICROSOFT_UPDATE_SERVICE_ID, 7, "")
 
             $timeout = 30
@@ -620,6 +626,8 @@ function Delete-UpdateTask {
 function Test-PendingReboot {
     $rebootRequired = $false
 
+    # Registry keys for pending reboot detection
+    # Reference: https://devblogs.microsoft.com/scripting/determine-pending-reboot-statuspowershell-style-part-1/
     $updateKeys = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired",
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
@@ -769,9 +777,12 @@ function Install-AllWindowsUpdatesViaCOM {
         $updateSession = New-Object -ComObject Microsoft.Update.Session
         $updateSearcher = $updateSession.CreateUpdateSearcher()
 
+        # ServerSelection = 3 (ssOthers) uses ServiceID to specify update service
+        # Reference: https://learn.microsoft.com/windows/win32/api/wuapi/nf-wuapi-iupdatesearcher-search
         $updateSearcher.ServerSelection = 3
         $updateSearcher.ServiceID = $MICROSOFT_UPDATE_SERVICE_ID
 
+        # Search criteria syntax: https://learn.microsoft.com/windows/win32/api/wuapi/nf-wuapi-iupdatesearcher-search
         $searchCriteria = "IsInstalled=0 and IsHidden=0"
         Write-Log "Searching with criteria: $searchCriteria" -Severity 'Info'
 
@@ -900,6 +911,7 @@ function Update-StoreApps {
         }
 
         # Trigger Store update check using CIM
+        # Reference: https://learn.microsoft.com/windows/win32/dmwmibridgeprov/mdm-enterprisemodernappmanagement-appmanagement01-updatescanmethod
         try {
             $namespaceName = "Root\cimv2\mdm\dmmap"
             $className = "MDM_EnterpriseModernAppManagement_AppManagement01"
@@ -926,6 +938,7 @@ function Update-DefenderDefinitions {
 
     try {
         # Check if Defender is available
+        # Reference: https://learn.microsoft.com/powershell/module/defender/update-mpsignature
         if (Get-Command Update-MpSignature -ErrorAction SilentlyContinue) {
             Update-MpSignature -UpdateSource MicrosoftUpdateServer -ErrorAction Stop
             Write-Log "Windows Defender definitions updated successfully" -Severity 'Success'
