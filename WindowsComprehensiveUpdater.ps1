@@ -1,5 +1,44 @@
-# WindowsComprehensiveUpdater.ps1 - Enhanced Version with Fail-Safe Mechanisms
-# Comprehensive Windows update script that installs ALL available updates with robust troubleshooting
+<#
+.SYNOPSIS
+    Windows Comprehensive Updater - Professional Edition v3.0
+    Enterprise-grade PowerShell tool for comprehensive Windows system updates
+
+.DESCRIPTION
+    Automatically installs ALL available Windows updates including security updates,
+    critical updates, drivers, feature packs, quality updates, optional updates,
+    third-party updates, Microsoft Store apps, Windows Defender definitions,
+    WinGet packages, and PowerShell modules with fail-safe mechanisms.
+
+.AUTHOR
+    JTG Systems
+    https://JTGSYSTEMS.COM
+
+.COPYRIGHT
+    Copyright (c) 2025 JTG Systems. All rights reserved.
+    This software is provided for personal and professional use.
+
+.VERSION
+    3.0 - Professional Edition with Fail-Safe Mechanisms
+
+.NOTES
+    - Requires Windows 10, Windows 11, or Windows Server 2016+
+    - Requires PowerShell 5.1 or higher
+    - Requires Administrator privileges (auto-elevation included)
+    - All components verified against official Microsoft documentation
+    - Includes comprehensive error handling and automatic rollback
+
+.LINK
+    https://JTGSYSTEMS.COM
+    https://github.com/jtgsystems/DRIVER-UPDATER---WINDOWS
+
+.EXAMPLE
+    .\WindowsComprehensiveUpdater.ps1
+    Runs the full update suite with interactive menu
+
+.EXAMPLE
+    .\WindowsComprehensiveUpdater.ps1 -VerboseOutput
+    Runs with detailed diagnostic output
+#>
 
 # Set execution policy for this session only
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force

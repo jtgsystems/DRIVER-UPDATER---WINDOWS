@@ -72,32 +72,32 @@ A comprehensive, production-ready PowerShell script that automatically installs 
 
 2. **Run the updater**
    ```powershell
-   .\new.ps1
+   .\WindowsComprehensiveUpdater.ps1
    ```
 
 ### Command-Line Options
 
 ```powershell
 # Test speed only (no changes)
-.\new.ps1 -TestOnly
+.\WindowsComprehensiveUpdater.ps1 -TestOnly
 
 # Apply optimizations without testing
-.\new.ps1 -OptimizeOnly
+.\WindowsComprehensiveUpdater.ps1 -OptimizeOnly
 
 # Safe mode (conservative settings)
-.\new.ps1 -SafeMode
+.\WindowsComprehensiveUpdater.ps1 -SafeMode
 
 # Auto-restart after updates
-.\new.ps1 -AutoRestart
+.\WindowsComprehensiveUpdater.ps1 -AutoRestart
 
 # Verbose output for troubleshooting
-.\new.ps1 -VerboseOutput
+.\WindowsComprehensiveUpdater.ps1 -VerboseOutput
 
 # Schedule automatic updates
-.\new.ps1 -Schedule
+.\WindowsComprehensiveUpdater.ps1 -Schedule
 
 # Display help
-.\new.ps1 -Help
+.\WindowsComprehensiveUpdater.ps1 -Help
 ```
 
 ### Interactive Menu
@@ -255,7 +255,7 @@ All components verified against official Microsoft documentation.
 ### Updates Not Found
 1. Check `WindowsUpdateLog.txt` for details
 2. Ensure Windows Update service is running
-3. Run `.\new.ps1 -VerboseOutput` for detailed diagnostics
+3. Run `.\WindowsComprehensiveUpdater.ps1 -VerboseOutput` for detailed diagnostics
 
 ### Script Hangs
 1. Check for stale lock file and delete if needed
@@ -350,7 +350,7 @@ This tool modifies Windows system settings. While comprehensive safety measures 
 
 1. **Check the built-in help**:
    ```powershell
-   .\new.ps1 -Help
+   .\WindowsComprehensiveUpdater.ps1 -Help
    ```
 
 2. **Review the logs**:
@@ -374,8 +374,10 @@ This tool modifies Windows system settings. While comprehensive safety measures 
 
 ---
 
-**Made with ⚡ by JTG Systems**
+**Made with ⚡ by [JTG Systems](https://JTGSYSTEMS.COM)**
 
 *Last Updated: October 2025 | Version 3.0 Professional Edition*
+
+**Website:** https://JTGSYSTEMS.COM
 
 🎵 **Listen for Darude Sandstorm to know when user action is needed!** 🎵
