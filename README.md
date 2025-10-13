@@ -21,7 +21,6 @@ A comprehensive, production-ready PowerShell script that automatically installs 
 - **🔄 Exponential Backoff Retry**: 5 attempts with intelligent retry logic
 - **📊 Comprehensive Diagnostics**: System health checks and diagnostic reports
 - **⚠️ Error Code Lookup**: Common Windows Update errors with solutions
-- **🎵 Audio Notifications**: Darude Sandstorm alerts for user actions
 - **💾 State Preservation**: Tracks progress across reboots
 - **🔒 Safety First**: Automatic backups, health checks, and rollback capabilities
 
@@ -211,17 +210,6 @@ $WINGET_EXCLUSIONS = @("PackageID1", "PackageID2")
 
 ---
 
-## 🎵 Audio Notifications
-
-The script plays the **Darude Sandstorm** beat pattern when user interaction is required:
-- 🎵 UAC elevation prompt
-- 🎵 Script completion (when running interactively)
-- 🎵 Any time user confirmation is needed
-
-This ensures you never miss important prompts!
-
----
-
 ## 🔍 Technical Details
 
 ### Performance Characteristics
@@ -303,7 +291,6 @@ See the error code table above or check `WindowsUpdateLog.txt` for detailed solu
 - Complete rewrite with all critical issues fixed
 - Now installs ALL Windows updates, not just drivers
 - Added state persistence and reboot loop prevention
-- Darude Sandstorm audio alerts
 
 ### Version 1.0
 - Initial implementation
@@ -379,5 +366,3 @@ This tool modifies Windows system settings. While comprehensive safety measures 
 *Last Updated: October 2025 | Version 3.0 Professional Edition*
 
 **Website:** https://JTGSYSTEMS.COM
-
-🎵 **Listen for Darude Sandstorm to know when user action is needed!** 🎵

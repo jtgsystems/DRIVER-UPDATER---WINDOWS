@@ -1222,37 +1222,10 @@ function Invoke-MainExecution {
 
 #endregion
 
-#region Audio Notification
-
-function Invoke-DarudeSandstorm {
-    $beepPattern = @(
-        @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100},
-        @{Freq=392; Dur=100}, @{Freq=392; Dur=100}, @{Freq=392; Dur=100}, @{Freq=392; Dur=100},
-        @{Freq=349; Dur=100}, @{Freq=349; Dur=100}, @{Freq=349; Dur=100}, @{Freq=349; Dur=100},
-        @{Freq=440; Dur=50}, @{Freq=440; Dur=50}, @{Freq=523; Dur=200},
-        @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100}, @{Freq=440; Dur=100}
-    )
-
-    Write-Host "`n🎵 DARUDE SANDSTORM - USER ACTION REQUIRED! 🎵" -ForegroundColor Magenta
-
-    foreach ($beep in $beepPattern) {
-        try {
-            [Console]::Beep($beep.Freq, $beep.Dur)
-        }
-        catch {
-            [System.Media.SystemSounds]::Exclamation.Play()
-            break
-        }
-    }
-}
-
-#endregion
-
 #region Entry Point
 
 # Check for admin privileges
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Invoke-DarudeSandstorm
     Write-Host "Script requires administrator privileges. Relaunching as administrator..." -ForegroundColor Yellow
     Write-Host "Please approve the User Account Control (UAC) prompt." -ForegroundColor Cyan
 
@@ -1316,7 +1289,6 @@ finally {
 
     # Only prompt if interactive and not scheduled task
     if ($script:isInteractive -and -not $env:TASK_SCHEDULER) {
-        Invoke-DarudeSandstorm
         Write-Host "`nPress any key to exit..." -ForegroundColor Cyan
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     }
