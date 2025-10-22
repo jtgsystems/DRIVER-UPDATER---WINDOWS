@@ -1,3 +1,5 @@
+![Banner](banner.png)
+
 # ⚡ Windows Comprehensive Updater - Professional Edition
 
 **Enterprise-grade PowerShell tool for comprehensive Windows system updates with fail-safe mechanisms and official Microsoft documentation integration**
