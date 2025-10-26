@@ -598,3 +598,9 @@ Get-Service wuauserv | Format-List *
 
 **Made with precision by JTG Systems**
 *Empowering IT professionals with enterprise-grade automation tools*
+
+## Framework Versions
+
+- No major frameworks detected in this project
+- This may be a utility script, documentation project, or uses custom dependencies
+
