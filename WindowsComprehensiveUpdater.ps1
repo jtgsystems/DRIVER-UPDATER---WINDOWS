@@ -50,6 +50,9 @@ $stateFile = Join-Path -Path $scriptDir -ChildPath "UpdateState.json"
 $lockFile = Join-Path -Path $scriptDir -ChildPath "UpdateScript.lock"
 $diagnosticLogFile = Join-Path -Path $scriptDir -ChildPath "DiagnosticReport.txt"
 
+# Enforce modern TLS for gallery/winget downloads
+try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 } catch {}
+
 # Configuration Constants
 # Microsoft Update Service ID - enables updates for Microsoft products beyond Windows
 # Reference: https://learn.microsoft.com/windows/win32/wua_sdk/opt-in-to-microsoft-update
@@ -524,6 +527,19 @@ function Check-Internet {
 
 #region Module Management
 
+function Ensure-NuGetProvider {
+    try {
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser
+        }
+        return $true
+    }
+    catch {
+        Write-Log "Failed to ensure NuGet provider: $($_.Exception.Message)" -Severity 'Error'
+        return $false
+    }
+}
+
 function Ensure-PSWindowsUpdateModule {
     try {
         if (Get-Module -Name PSWindowsUpdate) {
@@ -537,11 +553,8 @@ function Ensure-PSWindowsUpdateModule {
         }
 
         Write-Log "Installing PSWindowsUpdate module..." -Severity 'Info'
-
-        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-            Write-Log "Installing NuGet package provider..." -Severity 'Info'
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser
-        }
+        Write-Log "Installing NuGet package provider..." -Severity 'Info'
+        if (-not (Ensure-NuGetProvider)) { return $false }
 
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
 
@@ -740,40 +753,23 @@ function Install-AllWindowsUpdates {
                 Write-Log "  - $($update.Title) (${sizeInMB}MB)" -Severity 'Info'
             }
 
-            $successCount = 0
-            $failCount = 0
+            Write-Log "Installing discovered updates..." -Severity 'Info'
+            $installResult = Install-WindowsUpdate -Updates $updates -AcceptAll -IgnoreReboot -ErrorAction Stop
 
-            foreach ($update in $updates) {
-                try {
-                    Write-Log "Installing: $($update.Title)" -Severity 'Info'
-                    $result = Install-WindowsUpdate -KBArticleID $update.KBArticleID -AcceptAll -IgnoreReboot -ErrorAction Stop
+            $successCount = ($installResult | Where-Object { $_.Result -eq 'Installed' }).Count
+            $failCount = ($installResult | Where-Object { $_.Result -eq 'Failed' -or $_.Result -eq 'Aborted' }).Count
 
-                    if ($result.Result -eq "Installed") {
-                        $successCount++
-                        $script:state.SuccessfulUpdates += $update.Title
-                        Write-Log "Successfully installed: $($update.Title)" -Severity 'Success'
-                    }
-                    else {
-                        $failCount++
-                        $script:state.FailedUpdates += $update.Title
-                        Write-Log "Failed to install: $($update.Title)" -Severity 'Warning'
-                    }
+            foreach ($item in $installResult) {
+                if ($item.Result -eq 'Installed') {
+                    $script:state.SuccessfulUpdates += $item.Title
                 }
-                catch {
-                    $failCount++
-                    $script:state.FailedUpdates += $update.Title
-                    Write-Log "Error installing $($update.Title): $($_.Exception.Message)" -Severity 'Error'
-
-                    if ($_.Exception.HResult) {
-                        $errorCode = "0x{0:X8}" -f $_.Exception.HResult
-                        Get-WindowsUpdateErrorInfo -ErrorCode $errorCode
-                    }
+                elseif ($item.Result) {
+                    $script:state.FailedUpdates += $item.Title
                 }
-
-                Save-ScriptState
             }
 
             Write-Log "Windows update summary: $successCount succeeded, $failCount failed" -Severity 'Info'
+            Save-ScriptState
 
             return @{
                 Success = $true
@@ -905,21 +901,19 @@ function Update-WinGetPackages {
     try {
         Write-Log "Checking WinGet packages..." -Severity 'Info'
 
-        $updates = winget upgrade --accept-source-agreements 2>&1
-        $updateList = $updates | Select-String -Pattern "^\S+\s+\S+\s+->\s+\S+" | ForEach-Object {
-            $parts = $_.Line -split '\s+'
-            $parts[0]
-        }
+        $updatesJson = winget upgrade --accept-source-agreements --accept-package-agreements --output json 2>$null
+        $updates = $null
+        try { $updates = $updatesJson | ConvertFrom-Json } catch {}
 
-        if ($updateList.Count -eq 0) {
-            Write-Log "No WinGet updates available" -Severity 'Info'
+        if (-not $updates) {
+            Write-Log "Unable to parse WinGet upgrade list" -Severity 'Warning'
             return
         }
 
-        $toUpdate = $updateList | Where-Object { $_ -notin $WINGET_EXCLUSIONS }
+        $toUpdate = $updates | Where-Object { $_.PackageIdentifier -and ($_.PackageIdentifier -notin $WINGET_EXCLUSIONS) }
 
-        if ($toUpdate.Count -eq 0) {
-            Write-Log "All available updates are excluded" -Severity 'Info'
+        if (-not $toUpdate -or $toUpdate.Count -eq 0) {
+            Write-Log "No WinGet updates available" -Severity 'Info'
             return
         }
 
@@ -927,11 +921,11 @@ function Update-WinGetPackages {
 
         foreach ($package in $toUpdate) {
             try {
-                Write-Log "Updating: $package" -Severity 'Info'
-                winget upgrade $package --silent --accept-package-agreements --accept-source-agreements
+                Write-Log "Updating: $($package.PackageIdentifier)" -Severity 'Info'
+                winget upgrade --id $package.PackageIdentifier --silent --accept-package-agreements --accept-source-agreements
             }
             catch {
-                Write-Log "Failed to update $package : $($_.Exception.Message)" -Severity 'Warning'
+                Write-Log "Failed to update $($package.PackageIdentifier) : $($_.Exception.Message)" -Severity 'Warning'
             }
         }
     }
@@ -1003,6 +997,8 @@ function Update-PowerShellModules {
     Write-Log "Checking for PowerShell module updates..." -Severity 'Info'
 
     try {
+        if (-not (Ensure-NuGetProvider)) { return }
+
         $installedModules = Get-InstalledModule -ErrorAction SilentlyContinue
 
         if (-not $installedModules) {
