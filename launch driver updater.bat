@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 :: Windows Driver Updater Quick Launcher
-:: Version: 4.3
+:: Version: 4.4
 
 :: Determine the full path to the companion .ps1 file
 set "SCRIPT_DIR=%~dp0"

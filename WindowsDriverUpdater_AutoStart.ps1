@@ -9,7 +9,7 @@
     and removes itself when no more applicable updates are available. Feature upgrades
     (e.g., Windows 10 to Windows 11) are excluded.
 .NOTES
-    Version: 4.3
+    Version: 4.4
     Last Updated: 2025-12-19
     Requires: Windows PowerShell 5.1+, Administrator privileges
 #>
@@ -49,6 +49,10 @@ $script:Config = @{
         "*Upgrade to Windows*",
         "*Windows 11*"
     )
+    UpdateApps = $true
+    UpdateStoreApps = $true
+    UpdateDefender = $true
+    UpdatePowerShellModules = $true
 }
 
 # Determine script location (USB or local)
@@ -371,11 +375,126 @@ function Install-Updates {
 }
 #endregion
 
+#region App Update Functions
+function Update-WinGetPackages {
+    if (-not $script:Config.UpdateApps) {
+        return
+    }
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Log "WinGet not available. Skipping app updates." -Severity Warning
+        return
+    }
+
+    Write-Log "Checking WinGet packages..." -Severity Info
+    try {
+        $updatesJson = winget upgrade --accept-source-agreements --accept-package-agreements --output json 2>$null
+        $updates = $null
+        try { $updates = $updatesJson | ConvertFrom-Json } catch {}
+
+        if (-not $updates) {
+            Write-Log "Unable to parse WinGet upgrade list." -Severity Warning
+            return
+        }
+
+        $toUpdate = $updates | Where-Object { $_.PackageIdentifier }
+        if (-not $toUpdate -or $toUpdate.Count -eq 0) {
+            Write-Log "No WinGet updates available." -Severity Info
+            return
+        }
+
+        Write-Log "Updating $($toUpdate.Count) WinGet packages..." -Severity Info
+        foreach ($package in $toUpdate) {
+            try {
+                Write-Log "Updating: $($package.PackageIdentifier)" -Severity Info
+                winget upgrade --id $package.PackageIdentifier --silent --accept-package-agreements --accept-source-agreements
+            }
+            catch {
+                Write-Log "Failed to update $($package.PackageIdentifier): $($_.Exception.Message)" -Severity Warning
+            }
+        }
+    }
+    catch {
+        Write-Log "WinGet update error: $($_.Exception.Message)" -Severity Warning
+    }
+}
+
+function Update-StoreApps {
+    if (-not $script:Config.UpdateStoreApps) {
+        return
+    }
+
+    Write-Log "Updating Microsoft Store applications..." -Severity Info
+    try {
+        $namespaceName = "Root\cimv2\mdm\dmmap"
+        $className = "MDM_EnterpriseModernAppManagement_AppManagement01"
+        Get-CimInstance -Namespace $namespaceName -ClassName $className -ErrorAction Stop |
+            Invoke-CimMethod -MethodName UpdateScanMethod -ErrorAction Stop
+        Write-Log "Microsoft Store update scan initiated." -Severity Success
+    }
+    catch {
+        Write-Log "Store update scan failed, attempting wsreset." -Severity Warning
+        Start-Process "wsreset.exe" -NoNewWindow -ErrorAction SilentlyContinue
+    }
+}
+
+function Update-DefenderDefinitions {
+    if (-not $script:Config.UpdateDefender) {
+        return
+    }
+
+    Write-Log "Updating Windows Defender definitions..." -Severity Info
+    try {
+        if (Get-Command Update-MpSignature -ErrorAction SilentlyContinue) {
+            Update-MpSignature -UpdateSource MicrosoftUpdateServer -ErrorAction Stop
+            Write-Log "Windows Defender definitions updated." -Severity Success
+        }
+        else {
+            Write-Log "Windows Defender cmdlets not available. Skipping." -Severity Warning
+        }
+    }
+    catch {
+        Write-Log "Defender update failed: $($_.Exception.Message)" -Severity Warning
+    }
+}
+
+function Update-PowerShellModules {
+    if (-not $script:Config.UpdatePowerShellModules) {
+        return
+    }
+
+    Write-Log "Checking PowerShell module updates..." -Severity Info
+    try {
+        $installedModules = Get-InstalledModule -ErrorAction SilentlyContinue
+        if (-not $installedModules) {
+            Write-Log "No PowerShell Gallery modules found." -Severity Info
+            return
+        }
+
+        foreach ($module in $installedModules) {
+            try {
+                $latestVersion = Find-Module -Name $module.Name -ErrorAction SilentlyContinue
+                if ($latestVersion -and ($latestVersion.Version -gt $module.Version)) {
+                    Write-Log "Updating module: $($module.Name)" -Severity Info
+                    Update-Module -Name $module.Name -Force -ErrorAction Stop
+                }
+            }
+            catch {
+                Write-Log "Failed to update module $($module.Name): $($_.Exception.Message)" -Severity Warning
+            }
+        }
+    }
+    catch {
+        Write-Log "PowerShell module update error: $($_.Exception.Message)" -Severity Warning
+    }
+}
+#endregion
+
 #region Main Execution
 try {
     $separator = [string]::new('=', 60)
     Write-Log $separator -Severity Info
-    Write-Log "Driver Updater Auto-Start v4.3 Started" -Severity Info
+    Write-Log "Driver Updater Auto-Start v4.4 Started" -Severity Info
     Write-Log "Running from: $script:ScriptPath" -Severity Info
     Write-Log "Is USB: $script:IsUSB" -Severity Info
     Write-Log $separator -Severity Info
@@ -429,13 +548,18 @@ try {
         # Check if reboot is required
         $rebootRequired = Get-WURebootStatus -Silent
         if ($rebootRequired) {
-            Write-Log "System reboot required. Updates will continue after restart." -Severity Warning
-            Set-UpdaterState -State $state
+        Write-Log "System reboot required. Updates will continue after restart." -Severity Warning
+        Set-UpdaterState -State $state
             
             # Schedule reboot in 60 seconds
             Write-Log "Scheduling system restart in 60 seconds..." -Severity Warning
             shutdown /r /t 60 /c "System will restart in 60 seconds to complete driver installation. Save your work."
         }
+        # App and component updates (after Windows updates)
+        Update-DefenderDefinitions
+        Update-StoreApps
+        Update-WinGetPackages
+        Update-PowerShellModules
     } else {
         # No updates found
         $state.ConsecutiveNoUpdates++

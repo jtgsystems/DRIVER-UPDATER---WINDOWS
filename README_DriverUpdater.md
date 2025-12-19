@@ -5,8 +5,7 @@
 Note: Feature upgrades (e.g., Windows 10 to Windows 11) are excluded.
 This enhanced Windows Driver and Update Tool is a production-ready PowerShell script that automates the process of checking, validating, and installing Windows updates and drivers with comprehensive error handling, logging, and safety features.
 
-## Features
-
+## Features`r`n`r`n- App updates via WinGet and Microsoft Store (when available)`r`n- Defender definition updates and PowerShell module updates`r`n
 ### Core Features
 - **Automatic driver detection and installation** from Windows Update
 - **Comprehensive logging** with rotation and archival
@@ -247,5 +246,6 @@ For issues or feature requests, please:
 2. Review this documentation
 3. Test with minimal parameters
 4. Provide log excerpts when reporting issues
+
 
 

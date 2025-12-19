@@ -3,7 +3,7 @@
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-blue)](https://www.microsoft.com/windows)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://docs.microsoft.com/powershell/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-4.3-orange)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-4.4-orange)](CHANGELOG.md)
 
 ## 📋 Table of Contents
 
@@ -25,7 +25,7 @@
 
 ## 🎯 Overview
 
-The **Windows Driver and Update Tool** is an enterprise-grade, fully automated solution for installing Windows updates and drivers on new system builds or existing systems. It automatically installs itself to Windows startup, applies updates, and removes itself when complete. Feature upgrades (e.g., Windows 10 to Windows 11) are excluded. 🎉
+The **Windows Driver and Update Tool** is an enterprise-grade, fully automated solution for installing Windows updates, drivers, and apps on new system builds or existing systems. It automatically installs itself to Windows startup, applies updates, and removes itself when complete. Feature upgrades (e.g., Windows 10 to Windows 11) are excluded. 🎉
 
 ### 🌟 Key Highlights
 
@@ -302,7 +302,7 @@ $script:Config = @{
 
 ```
 2024-01-15 10:30:45 - [Info] ============================================================
-2024-01-15 10:30:45 - [Info] Driver Updater Auto-Start v4.3 Started
+2024-01-15 10:30:45 - [Info] Driver Updater Auto-Start v4.4 Started
 2024-01-15 10:30:45 - [Info] Running from: C:\DriverUpdater\WindowsDriverUpdater_AutoStart.ps1
 2024-01-15 10:30:45 - [Info] Is USB: False
 2024-01-15 10:30:46 - [Success] Modules installed successfully
@@ -508,8 +508,7 @@ When reporting issues, please include:
 
 ## Changelog
 
-### Version 4.3 (2025-12-19) - Drivers + Updates Auto-Start
-
+### Version 4.4 (2025-12-19) - Drivers, Updates, and Apps Auto-Start`r`n`r`n**Changes:**`r`n- Added app updates (WinGet and Microsoft Store)`r`n- Added Defender definitions and PowerShell module updates`r`n- Maintained feature-upgrade exclusion`r`n`r`n
 **Changes:**
 - Added Windows updates (security/critical/rollups) alongside driver updates
 - Explicitly excluded feature upgrades (e.g., Windows 10 to Windows 11)
@@ -587,6 +586,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 **Happy Updating!**
 
 *Made for Windows System Administrators*
+
 
 
 

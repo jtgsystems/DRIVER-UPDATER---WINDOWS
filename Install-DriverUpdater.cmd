@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 :: Quick installer for Driver Updater Tool
 :: Auto-elevates and runs the main script
-:: Version: 4.3
+:: Version: 4.4
 
 :: Set script directory (handles spaces in paths)
 set "SCRIPT_DIR=%~dp0"

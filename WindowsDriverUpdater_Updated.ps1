@@ -11,7 +11,7 @@
     (e.g., Windows 10 to Windows 11) are excluded.
 
 .NOTES
-    Version: 4.3
+    Version: 4.4
     Author: Enterprise Tools Team
     Requires: Windows PowerShell 5.1 or later
     Admin Rights: Required
@@ -64,6 +64,10 @@ $script:Config = @{
         "*Upgrade to Windows*",
         "*Windows 11*"
     )
+    UpdateApps = $true
+    UpdateStoreApps = $true
+    UpdateDefender = $true
+    UpdatePowerShellModules = $true
 }
 
 # Ensure TLS 1.2 is enabled (TLS 1.3 added conditionally for compatibility)
@@ -642,13 +646,128 @@ function Install-DriverUpdates {
 
 #endregion
 
+#region App Update Functions
+function Update-WinGetPackages {
+    if (-not $script:Config.UpdateApps) {
+        return
+    }
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Log "WinGet not available. Skipping app updates." -Severity Warning
+        return
+    }
+
+    try {
+        Write-Log "Checking WinGet packages..." -Severity Info
+        $updatesJson = winget upgrade --accept-source-agreements --accept-package-agreements --output json 2>$null
+        $updates = $null
+        try { $updates = $updatesJson | ConvertFrom-Json } catch {}
+
+        if (-not $updates) {
+            Write-Log "Unable to parse WinGet upgrade list." -Severity Warning
+            return
+        }
+
+        $toUpdate = $updates | Where-Object { $_.PackageIdentifier }
+        if (-not $toUpdate -or $toUpdate.Count -eq 0) {
+            Write-Log "No WinGet updates available." -Severity Info
+            return
+        }
+
+        Write-Log "Updating $($toUpdate.Count) WinGet packages..." -Severity Info
+        foreach ($package in $toUpdate) {
+            try {
+                Write-Log "Updating: $($package.PackageIdentifier)" -Severity Info
+                winget upgrade --id $package.PackageIdentifier --silent --accept-package-agreements --accept-source-agreements
+            }
+            catch {
+                Write-Log "Failed to update $($package.PackageIdentifier): $($_.Exception.Message)" -Severity Warning
+            }
+        }
+    }
+    catch {
+        Write-Log "WinGet update error: $($_.Exception.Message)" -Severity Warning
+    }
+}
+
+function Update-StoreApps {
+    if (-not $script:Config.UpdateStoreApps) {
+        return
+    }
+
+    Write-Log "Updating Microsoft Store applications..." -Severity Info
+    try {
+        $namespaceName = "Root\cimv2\mdm\dmmap"
+        $className = "MDM_EnterpriseModernAppManagement_AppManagement01"
+        Get-CimInstance -Namespace $namespaceName -ClassName $className -ErrorAction Stop |
+            Invoke-CimMethod -MethodName UpdateScanMethod -ErrorAction Stop
+        Write-Log "Microsoft Store update scan initiated." -Severity Success
+    }
+    catch {
+        Write-Log "Store update scan failed, attempting wsreset." -Severity Warning
+        Start-Process "wsreset.exe" -NoNewWindow -ErrorAction SilentlyContinue
+    }
+}
+
+function Update-DefenderDefinitions {
+    if (-not $script:Config.UpdateDefender) {
+        return
+    }
+
+    Write-Log "Updating Windows Defender definitions..." -Severity Info
+    try {
+        if (Get-Command Update-MpSignature -ErrorAction SilentlyContinue) {
+            Update-MpSignature -UpdateSource MicrosoftUpdateServer -ErrorAction Stop
+            Write-Log "Windows Defender definitions updated." -Severity Success
+        }
+        else {
+            Write-Log "Windows Defender cmdlets not available. Skipping." -Severity Warning
+        }
+    }
+    catch {
+        Write-Log "Defender update failed: $($_.Exception.Message)" -Severity Warning
+    }
+}
+
+function Update-PowerShellModules {
+    if (-not $script:Config.UpdatePowerShellModules) {
+        return
+    }
+
+    Write-Log "Checking PowerShell module updates..." -Severity Info
+    try {
+        $installedModules = Get-InstalledModule -ErrorAction SilentlyContinue
+        if (-not $installedModules) {
+            Write-Log "No PowerShell Gallery modules found." -Severity Info
+            return
+        }
+
+        foreach ($module in $installedModules) {
+            try {
+                $latestVersion = Find-Module -Name $module.Name -ErrorAction SilentlyContinue
+                if ($latestVersion -and ($latestVersion.Version -gt $module.Version)) {
+                    Write-Log "Updating module: $($module.Name)" -Severity Info
+                    Update-Module -Name $module.Name -Force -ErrorAction Stop
+                }
+            }
+            catch {
+                Write-Log "Failed to update module $($module.Name): $($_.Exception.Message)" -Severity Warning
+            }
+        }
+    }
+    catch {
+        Write-Log "PowerShell module update error: $($_.Exception.Message)" -Severity Warning
+    }
+}
+#endregion
+
 #region Main Execution
 try {
     # Rotate log if necessary
     Invoke-LogRotation
 
     Write-Log "Driver Update Manager started." -Severity Info
-    Write-Log "Script version: 4.3" -Severity Info
+    Write-Log "Script version: 4.4" -Severity Info
     Write-Log "Running in $(if ($Silent) { 'silent' } else { 'interactive' }) mode" -Severity Info
 
     # Install required modules
@@ -691,6 +810,12 @@ try {
         else {
             Write-Log "No matching driver updates found based on filter criteria." -Severity Info
         }
+
+        # Update additional components
+        Update-DefenderDefinitions
+        Update-StoreApps
+        Update-WinGetPackages
+        Update-PowerShellModules
     }
     else {
         throw "No internet connection available. Please check your network settings."
