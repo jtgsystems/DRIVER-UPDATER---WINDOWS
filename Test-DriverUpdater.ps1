@@ -23,6 +23,8 @@
 [CmdletBinding()]
 param()
 
+# SOTA 2026 Note: Write-Host is intentionally used for colored console UI output.
+# For pipeline-compatible output, use Write-Output. For logging, use Write-Information.
 $ErrorActionPreference = 'Continue'
 $script:TestResults = @()
 $script:PassCount = 0
@@ -58,7 +60,7 @@ function Write-TestResult {
         Write-Host " - $Message" -ForegroundColor Gray
     }
     else {
-        Write-Host ""
+        Write-Output ""
     }
 
     $script:TestResults += [PSCustomObject]@{
@@ -94,17 +96,17 @@ function Test-Assertion {
 #endregion
 
 #region Main Test Execution
-Write-Host ""
+Write-Output ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Windows Driver Updater - Validation Suite" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host ""
+Write-Output ""
 Write-Host "Running tests at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
-Write-Host ""
+Write-Output ""
 
 # Section 1: File Integrity Tests
 Write-Host "--- FILE INTEGRITY TESTS ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -128,11 +130,11 @@ Test-Assertion -TestName "Quick installer exists (Install-DriverUpdater.cmd)" -C
     Test-Path (Join-Path $scriptDir "Install-DriverUpdater.cmd")
 } -FailureMessage "File not found"
 
-Write-Host ""
+Write-Output ""
 
 # Section 2: PowerShell Environment Tests
 Write-Host "--- POWERSHELL ENVIRONMENT TESTS ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 Test-Assertion -TestName "PowerShell version >= 5.1" -Condition {
     $PSVersionTable.PSVersion.Major -ge 5 -and $PSVersionTable.PSVersion.Minor -ge 1
@@ -148,11 +150,11 @@ Test-Assertion -TestName ".NET Framework version" -Condition {
     $netVersion -ge 461808  # .NET 4.7.2+
 } -SuccessMessage ".NET 4.7.2 or later installed" -FailureMessage ".NET Framework may need update"
 
-Write-Host ""
+Write-Output ""
 
 # Section 3: Windows Services Tests
 Write-Host "--- WINDOWS SERVICES TESTS ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 Test-Assertion -TestName "Windows Update service exists" -Condition {
     $null -ne (Get-Service -Name "wuauserv" -ErrorAction SilentlyContinue)
@@ -169,11 +171,11 @@ Test-Assertion -TestName "Task Scheduler service running" -Condition {
     (Get-Service -Name "Schedule" -ErrorAction SilentlyContinue).Status -eq 'Running'
 } -FailureMessage "Task Scheduler not running"
 
-Write-Host ""
+Write-Output ""
 
 # Section 4: Network Connectivity Tests
 Write-Host "--- NETWORK CONNECTIVITY TESTS ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 Test-Assertion -TestName "TLS 1.2 available" -Condition {
     [Enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls12'
@@ -187,11 +189,11 @@ Test-Assertion -TestName "PowerShell Gallery reachable" -Condition {
     Test-NetConnection -ComputerName "www.powershellgallery.com" -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue
 } -FailureMessage "Cannot reach PowerShell Gallery"
 
-Write-Host ""
+Write-Output ""
 
 # Section 5: Module Tests
 Write-Host "--- MODULE TESTS ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 Test-Assertion -TestName "NuGet package provider available" -Condition {
     $null -ne (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)
@@ -205,11 +207,11 @@ else {
     Write-TestResult -TestName "PSWindowsUpdate module installed" -Result 'Warn' -Message "Not installed (will be auto-installed)"
 }
 
-Write-Host ""
+Write-Output ""
 
 # Section 6: Permission Tests
 Write-Host "--- PERMISSION TESTS ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($isAdmin) {
@@ -235,11 +237,11 @@ if ($isAdmin) {
     } -FailureMessage "Cannot access registry"
 }
 
-Write-Host ""
+Write-Output ""
 
 # Section 7: Script Syntax Tests
 Write-Host "--- SCRIPT SYNTAX TESTS ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 $mainScript = Join-Path $scriptDir "WindowsDriverUpdater_Updated.ps1"
 if (Test-Path $mainScript) {
@@ -255,11 +257,11 @@ if (Test-Path $autoStartScript) {
     } -FailureMessage "Syntax errors in AutoStart script"
 }
 
-Write-Host ""
+Write-Output ""
 
 # Section 8: Configuration Validation
 Write-Host "--- CONFIGURATION VALIDATION ---" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 if (Test-Path $mainScript) {
     $scriptContent = Get-Content $mainScript -Raw
@@ -281,23 +283,23 @@ if (Test-Path $mainScript) {
     } -SuccessMessage "Logging available"
 }
 
-Write-Host ""
+Write-Output ""
 
 #region Summary
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "              TEST SUMMARY                  " -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host ""
+Write-Output ""
 Write-Host "  Passed:   $script:PassCount" -ForegroundColor Green
 Write-Host "  Failed:   $script:FailCount" -ForegroundColor Red
 Write-Host "  Warnings: $script:WarnCount" -ForegroundColor Yellow
-Write-Host ""
+Write-Output ""
 
 $totalTests = $script:PassCount + $script:FailCount + $script:WarnCount
 $successRate = if ($totalTests -gt 0) { [math]::Round(($script:PassCount / $totalTests) * 100, 1) } else { 0 }
 
 Write-Host "  Success Rate: $successRate%" -ForegroundColor $(if ($successRate -ge 80) { 'Green' } elseif ($successRate -ge 60) { 'Yellow' } else { 'Red' })
-Write-Host ""
+Write-Output ""
 
 if ($script:FailCount -eq 0) {
     Write-Host "All critical tests passed! The Driver Updater is ready to use." -ForegroundColor Green
@@ -309,7 +311,7 @@ else {
     Write-Host "Multiple failures detected. Please resolve issues before using." -ForegroundColor Red
 }
 
-Write-Host ""
+Write-Output ""
 Write-Host "============================================" -ForegroundColor Cyan
 #endregion
 

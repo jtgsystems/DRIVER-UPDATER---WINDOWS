@@ -31,6 +31,8 @@ param (
     [string]$ExcludeFilter          # Exclude drivers matching this filter
 )
 
+# SOTA 2026: Using Write-Host for colored UI (intentional), Write-Output for pipeline data
+# ForEach-Object replaced with foreach loops for better performance (lines 372, 390)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -369,7 +371,12 @@ function Select-DriverUpdates {
 
     # Apply include filter if specified
     if (-not [string]::IsNullOrEmpty($IncludeFilter)) {
-        $keywords = $IncludeFilter -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        # SOTA 2026: Use foreach instead of ForEach-Object for better performance
+        $keywords = @()
+        foreach ($kw in ($IncludeFilter -split ',')) {
+            $trimmed = $kw.Trim()
+            if ($trimmed) { $keywords += $trimmed }
+        }
         $filteredUpdates = @($filteredUpdates | Where-Object {
             $update = $_
             $matchFound = $false
@@ -387,7 +394,12 @@ function Select-DriverUpdates {
 
     # Apply exclude filter if specified
     if (-not [string]::IsNullOrEmpty($ExcludeFilter)) {
-        $excludeKeywords = $ExcludeFilter -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        # SOTA 2026: Use foreach instead of ForEach-Object for better performance
+        $excludeKeywords = @()
+        foreach ($kw in ($ExcludeFilter -split ',')) {
+            $trimmed = $kw.Trim()
+            if ($trimmed) { $excludeKeywords += $trimmed }
+        }
         $filteredUpdates = @($filteredUpdates | Where-Object {
             $update = $_
             $shouldExclude = $false
@@ -436,7 +448,7 @@ function Show-DriverUpdates {
         Write-Host $update.Description
     }
 
-    Write-Host ""
+    Write-Output ""
 }
 
 function Backup-ExistingDrivers {
