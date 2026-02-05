@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [ main, master ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+jobs:
+  pssa-lint:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install PSScriptAnalyzer
+      shell: pwsh
+      run: |
+        Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+        Import-Module PSScriptAnalyzer
+
+    - name: Run PSScriptAnalyzer
+      shell: pwsh
+      run: |
+        $results = Invoke-ScriptAnalyzer -Path . -Filter "*.ps1" -Recurse -Severity Warning,Error -ExcludeRule PSUseShouldProcessForStateChangingFunctions
+        $results | Format-Table -AutoSize
+        if ($results.Severity -contains "Error") {
+          Write-Error "PSScriptAnalyzer found errors"
+          exit 1
+        }
+
+  powershell-syntax:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check PowerShell syntax
+      shell: pwsh
+      run: |
+        $scripts = Get-ChildItem -Path . -Filter "*.ps1" -Recurse | Where-Object { $_.FullName -notlike "*\.retired\*" }
+        foreach ($script in $scripts) {
+          $errors = $null
+          $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Path $script.FullName -Raw), [ref]$errors)
+          if ($errors.Count -eq 0) {
+            Write-Host "✓ Syntax valid: $($script.Name)"
+          } else {
+            Write-Error "Syntax error in $($script.Name)"
+            exit 1
+          }
+        }
+
+  security-scan:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Security scan for secrets
+      shell: pwsh
+      run: |
+        $patterns = @(
+          'password\s*=\s*["\'][^"\']+["\']',
+          'apikey\s*=\s*["\'][^"\']+["\']',
+          'secret\s*=\s*["\'][^"\']+["\']',
+          'connectionstring\s*=\s*["\'][^"\']+["\']'
+        )
+        $scripts = Get-ChildItem -Path . -Filter "*.ps1" -Recurse | Where-Object { $_.FullName -notlike "*\.retired\*" }
+        $found = $false
+        foreach ($script in $scripts) {
+          $content = Get-Content -Path $script.FullName -Raw
+          foreach ($pattern in $patterns) {
+            if ($content -match $pattern) {
+              Write-Warning "Potential secret found in $($script.Name)"
+              $found = $true
+            }
+          }
+        }
+        if (-not $found) {
+          Write-Host "✓ No obvious secrets found"
+        }
+
+  documentation-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check README exists
+      run: |
+        test -f README.md || (echo "README.md is missing" && exit 1)
+        echo "✓ README.md exists"
+
+    - name: Verify version mentioned
+      run: |
+        grep -qi "version\|v6\|6\.0" README.md && echo "✓ Version mentioned in README"
