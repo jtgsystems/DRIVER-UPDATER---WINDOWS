@@ -506,7 +506,12 @@ function Install-UpdatesParallel {
                 for ($j = 0; $j -lt $runspaces.Count; $j++) {
                     if ($runspaces[$j].Status.IsCompleted) {
                         $result = $runspaces[$j].Pipe.EndInvoke($runspaces[$j].Status)
-                        if ($result.Success) { $script:InstalledCount++ } else { $script:FailedCount++ }
+                        if ($result.Success) {
+                            $installed++
+                        } else {
+                            $failed++
+                            Write-Log "Failed: $($result.Update) - $($result.Error)" -Severity Error
+                        }
                         $runspaces[$j].Pipe.Dispose()
                         $runspaces.RemoveAt($j)
                         $completed = $true
