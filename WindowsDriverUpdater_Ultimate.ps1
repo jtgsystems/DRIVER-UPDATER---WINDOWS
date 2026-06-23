@@ -96,7 +96,7 @@ $script:Config['MaxConsecutiveNoUpdates'] = 2
 $script:Config['MaxReboots'] = 5
 
 # SOTA 2026: Pre-computed hash codes for faster lookups
-$script:ExcludedHashes = [HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$script:ExcludedHashes = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
 @('Feature update', 'Upgrade to Windows', 'Windows 11', 'Preview', 'Beta', 'Insider') | 
     ForEach-Object { $script:ExcludedHashes.Add($_) | Out-Null }
 
@@ -115,7 +115,7 @@ if (-not [System.IO.Directory]::Exists($script:WorkingDir)) {
 # SECTION 4: LAZY INITIALIZATION OF EXPENSIVE OBJECTS
 # =============================================================================
 # SOTA 2026: Use Lazy<T> for expensive objects - only created when first accessed
-$script:LazyWUSession = [Lazy[object]]::new({
+$script:LazyWUSession = [Lazy[object]]::new([Func[object]]{
     try {
         return New-Object -ComObject Microsoft.Update.Session
     } catch {
@@ -123,25 +123,25 @@ $script:LazyWUSession = [Lazy[object]]::new({
     }
 })
 
-$script:LazyWUSearcher = [Lazy[object]]::new({
+$script:LazyWUSearcher = [Lazy[object]]::new([Func[object]]{
     if ($script:LazyWUSession.Value) {
         return $script:LazyWUSession.Value.CreateUpdateSearcher()
     }
     return $null
 })
 
-$script:LazyWUInstaller = [Lazy[object]]::new({
+$script:LazyWUInstaller = [Lazy[object]]::new([Func[object]]{
     if ($script:LazyWUSession.Value) {
         return $script:LazyWUSession.Value.CreateUpdateInstaller()
     }
     return $null
 })
 
-$script:LazyLogBuilder = [Lazy[StringBuilder]]::new({
+$script:LazyLogBuilder = [Lazy[StringBuilder]]::new([Func[StringBuilder]]{
     return [StringBuilder]::new(4096)  # Pre-allocate 4KB
 })
 
-$script:LazyRunspacePool = [Lazy[System.Management.Automation.Runspaces.RunspacePool]]::new({
+$script:LazyRunspacePool = [Lazy[System.Management.Automation.Runspaces.RunspacePool]]::new([Func[System.Management.Automation.Runspaces.RunspacePool]]{
     $rsp = [runspacefactory]::CreateRunspacePool(1, [Environment]::ProcessorCount)
     $rsp.Open()
     return $rsp
@@ -318,9 +318,7 @@ function Get-UpdaterState {
         IsComplete = $false
         RebootCount = 0
         MaxReboots = 5
-        LastBootTime = [System.Management.ManagementDateTimeConverter]::ToDateTime(
-            (Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime -ErrorAction SilentlyContinue).LastBootUpTime
-        )
+        LastBootTime = (Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime -ErrorAction SilentlyContinue).LastBootUpTime
         PendingUpdatesFound = $false
         Version = 6
     }
@@ -397,11 +395,11 @@ function Get-WindowsUpdatesDirect {
         $updates = $searchResult.Updates
         
         if ($updates.Count -eq 0) {
-            return [List[object]]::new()
+            return [System.Collections.Generic.List[object]]::new()
         }
         
         # SOTA 2026: Fast filtering using HashSet lookup
-        $filtered = [List[object]]::new($updates.Count)
+        $filtered = [System.Collections.Generic.List[object]]::new()
         
         for ($i = 0; $i -lt $updates.Count; $i++) {
             $update = $updates.Item($i)
@@ -434,7 +432,7 @@ function Get-WindowsUpdatesDirect {
         
     } catch {
         Write-Log "WUA search failed: $_" -Severity Error
-        return [List[object]]::new()
+        return [System.Collections.Generic.List[object]]::new()
     }
 }
 
@@ -468,7 +466,7 @@ function Install-UpdatesParallel {
     
     # SOTA 2026: Use runspace pool for true parallelism
     $runspacePool = $script:LazyRunspacePool.Value
-    $runspaces = [List[object]]::new()
+    $runspaces = [System.Collections.Generic.List[object]]::new()
     
     # Create PowerShell instances for each update
     for ($i = 0; $i -lt $Updates.Count; $i++) {
@@ -744,7 +742,7 @@ function Remove-SelfAndCleanupFast {
         
         # Safeguard: Validate the path before allowing deletion under SYSTEM principal
         $targetDir = $script:WorkingDir
-        if ($null -eq $targetDir -or $targetDir -eq "" -or $targetDir -eq "\" -or $targetDir -eq "/" -or $targetDir -match '^(C:\\|C:\\Windows|C:\\Program Files|C:\\Users|\$env:SystemRoot|\$env:windir)') {
+        if ($null -eq $targetDir -or $targetDir -eq "" -or $targetDir -eq "\" -or $targetDir -eq "/" -or $targetDir -match '^(C:\\?$|C:\\Windows|C:\\Program Files|C:\\Users|\$env:SystemRoot|\$env:windir)') {
             Write-Log "ABORTED: Refusing to delete protected path: $targetDir" -Severity Error
             return $false
         }
@@ -752,7 +750,7 @@ function Remove-SelfAndCleanupFast {
         # Resolve targetDir to an absolute path for safety check
         try {
             $resolvedPath = [System.IO.Path]::GetFullPath($targetDir)
-            if ($resolvedPath -match '^(C:\\|C:\\Windows|C:\\Program Files|C:\\Users)') {
+            if ($resolvedPath -match '^(C:\\?$|C:\\Windows|C:\\Program Files|C:\\Users)') {
                 Write-Log "ABORTED: Resolved path is in a protected system directory: $resolvedPath" -Severity Error
                 return $false
             }
@@ -767,6 +765,7 @@ function Remove-SelfAndCleanupFast {
         
         $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c timeout /t 20 /nobreak >nul && rd /s /q `"$targetDir`" 2>nul"
         $trigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddSeconds(15))
+        $trigger.EndBoundary = ([DateTime]::Now.AddMinutes(10)).ToString("yyyy-MM-dd'T'HH:mm:ss")
         $settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
         # SOTA 2026: Ensure cleanup runs elevated as SYSTEM to successfully delete the working folder
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -787,7 +786,7 @@ function Remove-SelfAndCleanupFast {
 function Invoke-Benchmark {
     Write-Log "Running performance benchmarks..." -Severity Info
     
-    $results = [List[string]]::new()
+    $results = [System.Collections.Generic.List[string]]::new()
     
     # Benchmark 1: State serialization
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
