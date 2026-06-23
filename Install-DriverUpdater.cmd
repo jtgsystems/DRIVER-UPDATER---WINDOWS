@@ -24,7 +24,7 @@ if %errorlevel% == 0 (
 ) else (
     :: Not admin, self-elevate with proper path quoting
     echo Requesting administrator privileges...
-    powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File \"\"%SCRIPT_DIR%WindowsDriverUpdater_Ultimate.ps1\"\"' -Verb RunAs"
+    powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File ""%SCRIPT_DIR%WindowsDriverUpdater_Ultimate.ps1""' -Verb RunAs"
     if %errorlevel% neq 0 (
         echo ERROR: Failed to elevate privileges
         pause

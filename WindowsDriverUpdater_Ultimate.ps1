@@ -311,19 +311,7 @@ function Flush-LogBuffer {
 # SECTION 7: BINARY STATE SERIALIZATION (vs JSON)
 # =============================================================================
 function Get-UpdaterState {
-    if ([System.IO.File]::Exists($script:StateFilePath)) {
-        try {
-            # SOTA 2026: Clean and safe JSON parsing compatible with PS 5.1 and 7+
-            $json = [System.IO.File]::ReadAllText($script:StateFilePath)
-            $state = $json | ConvertFrom-Json
-            return $state
-        } catch {
-            # Corrupted state, return default
-        }
-    }
-    
-    # Default state with optimized properties
-    return [PSCustomObject]@{
+    $defaultState = [PSCustomObject]@{
         InstallCount = 0
         LastRun = $null
         ConsecutiveNoUpdates = 0
@@ -336,6 +324,28 @@ function Get-UpdaterState {
         PendingUpdatesFound = $false
         Version = 6
     }
+    
+    if ([System.IO.File]::Exists($script:StateFilePath)) {
+        try {
+            # SOTA 2026: Clean and safe JSON parsing compatible with PS 5.1 and 7+
+            $json = [System.IO.File]::ReadAllText($script:StateFilePath)
+            $parsed = $json | ConvertFrom-Json
+            
+            # Map parsed fields onto default state to ensure type stability and completeness
+            if ($parsed) {
+                foreach ($prop in $defaultState.PSObject.Properties) {
+                    if ($null -ne $parsed.$($prop.Name)) {
+                        $defaultState.$($prop.Name) = $parsed.$($prop.Name)
+                    }
+                }
+            }
+            return $defaultState
+        } catch {
+            Write-Log "Failed to parse state file, using defaults: $_" -Severity Warning
+        }
+    }
+    
+    return $defaultState
 }
 
 function Set-UpdaterState {
@@ -345,8 +355,17 @@ function Set-UpdaterState {
     $State.LastRun = [DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss")
     
     try {
-        $json = $State | ConvertTo-Json -Depth 3
-        [System.IO.File]::WriteAllText($script:StateFilePath, $json, [System.Text.Encoding]::UTF8)
+        # Secure serialization with deep nesting support
+        $json = $State | ConvertTo-Json -Depth 10
+        
+        # Atomic replacement: write to temp file then rename
+        $tempPath = "$($script:StateFilePath).tmp"
+        [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+        
+        if ([System.IO.File]::Exists($script:StateFilePath)) {
+            [System.IO.File]::Delete($script:StateFilePath)
+        }
+        [System.IO.File]::Move($tempPath, $script:StateFilePath)
     } catch {
         Write-Log "State save failed: $_" -Severity Error
     }
@@ -593,11 +612,11 @@ function Add-ToStartupFast {
             Write-Log "Copied from USB to: $localPath" -Severity Info
         }
         
-        # SOTA 2026: Register Scheduled Task triggered at logon for Administrators (elevated without UAC prompts)
+        # SOTA 2026: Register Scheduled Task triggered at logon running as SYSTEM (elevated without UAC prompts)
         $taskName = $script:Config['StartupTaskName']
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$execPath`""
         $trigger = New-ScheduledTaskTrigger -AtLogon
-        $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Administrators" -RunLevel Highest
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
@@ -663,8 +682,11 @@ function Get-PendingRebootStatusFast {
     # Check HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations value
     try {
         $sessionManager = Get-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -ErrorAction SilentlyContinue
-        if ($sessionManager -and $sessionManager.GetValue("PendingFileRenameOperations")) {
-            return $true
+        if ($sessionManager) {
+            $pfro = $sessionManager.GetValue("PendingFileRenameOperations")
+            if ($pfro -is [array] -and ($pfro | Where-Object { $_ -ne "" }).Count -gt 0) {
+                return $true
+            }
         }
     } catch {}
     
@@ -720,11 +742,30 @@ function Remove-SelfAndCleanupFast {
             [System.IO.File]::Delete($script:StateFilePath)
         }
         
+        # Safeguard: Validate the path before allowing deletion under SYSTEM principal
+        $targetDir = $script:WorkingDir
+        if ($null -eq $targetDir -or $targetDir -eq "" -or $targetDir -eq "\" -or $targetDir -eq "/" -or $targetDir -match '^(C:\\|C:\\Windows|C:\\Program Files|C:\\Users|\$env:SystemRoot|\$env:windir)') {
+            Write-Log "ABORTED: Refusing to delete protected path: $targetDir" -Severity Error
+            return $false
+        }
+        
+        # Resolve targetDir to an absolute path for safety check
+        try {
+            $resolvedPath = [System.IO.Path]::GetFullPath($targetDir)
+            if ($resolvedPath -match '^(C:\\|C:\\Windows|C:\\Program Files|C:\\Users)') {
+                Write-Log "ABORTED: Resolved path is in a protected system directory: $resolvedPath" -Severity Error
+                return $false
+            }
+        } catch {
+            Write-Log "ABORTED: Target directory path is invalid: $targetDir" -Severity Error
+            return $false
+        }
+
         # Schedule cleanup task
         $cleanupTaskName = "DriverUpdaterCleanup_Ultimate"
         Unregister-ScheduledTask -TaskName $cleanupTaskName -Confirm:$false -ErrorAction SilentlyContinue
         
-        $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c timeout /t 20 /nobreak >nul && rd /s /q `"$($script:WorkingDir)`" 2>nul"
+        $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c timeout /t 20 /nobreak >nul && rd /s /q `"$targetDir`" 2>nul"
         $trigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddSeconds(15))
         $settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
         # SOTA 2026: Ensure cleanup runs elevated as SYSTEM to successfully delete the working folder
