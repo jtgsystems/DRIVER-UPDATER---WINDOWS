@@ -12,19 +12,19 @@ set "SCRIPT_DIR=%~dp0"
 net session >nul 2>&1
 if %errorlevel% == 0 (
     :: Already admin, run the main script
-    if exist "%SCRIPT_DIR%WindowsDriverUpdater_AutoStart.bat" (
-        call "%SCRIPT_DIR%WindowsDriverUpdater_AutoStart.bat"
+    if exist "%SCRIPT_DIR%WindowsDriverUpdater_Ultimate.ps1" (
+        powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%WindowsDriverUpdater_Ultimate.ps1"
         exit /b %errorlevel%
     ) else (
-        echo ERROR: WindowsDriverUpdater_AutoStart.bat not found!
-        echo Expected location: "%SCRIPT_DIR%WindowsDriverUpdater_AutoStart.bat"
+        echo ERROR: WindowsDriverUpdater_Ultimate.ps1 not found!
+        echo Expected location: "%SCRIPT_DIR%WindowsDriverUpdater_Ultimate.ps1"
         pause
         exit /b 1
     )
 ) else (
     :: Not admin, self-elevate with proper path quoting
     echo Requesting administrator privileges...
-    powershell -Command "Start-Process cmd -ArgumentList '/c \"\"%SCRIPT_DIR%WindowsDriverUpdater_AutoStart.bat\"\"' -Verb RunAs"
+    powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File \"\"%SCRIPT_DIR%WindowsDriverUpdater_Ultimate.ps1\"\"' -Verb RunAs"
     if %errorlevel% neq 0 (
         echo ERROR: Failed to elevate privileges
         pause

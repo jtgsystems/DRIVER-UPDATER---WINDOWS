@@ -89,7 +89,7 @@ $script:Config['ScriptName'] = "WindowsDriverUpdater_Ultimate"
 $script:Config['StartupRegPath'] = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 $script:Config['StartupTaskName'] = "DriverUpdaterUltimate"
 $script:Config['LogFileName'] = "DriverUpdater_Ultimate.log"
-$script:Config['StateFile'] = "DriverUpdater_v6.bin"  # Binary format
+$script:Config['StateFile'] = "DriverUpdater_v6.json"  # JSON format
 $script:Config['MaxRetries'] = 3
 $script:Config['RetryDelaySeconds'] = 5
 $script:Config['MaxConsecutiveNoUpdates'] = 2
@@ -313,16 +313,9 @@ function Flush-LogBuffer {
 function Get-UpdaterState {
     if ([System.IO.File]::Exists($script:StateFilePath)) {
         try {
-            # SOTA 2026: Binary deserialization is 10x faster than JSON
-            $bytes = if ($script:HasJitAssembly) {
-                [DriverUpdaterUltimate.FastFile]::ReadAllBytesFast($script:StateFilePath)
-            } else {
-                [System.IO.File]::ReadAllBytes($script:StateFilePath)
-            }
-            $ms = [MemoryStream]::new($bytes)
-            $formatter = [System.Runtime.Serialization.Formatters.Binary.BinaryFormatter]::new()
-            $state = $formatter.Deserialize($ms)
-            $ms.Close()
+            # SOTA 2026: Clean and safe JSON parsing compatible with PS 5.1 and 7+
+            $json = [System.IO.File]::ReadAllText($script:StateFilePath)
+            $state = $json | ConvertFrom-Json
             return $state
         } catch {
             # Corrupted state, return default
@@ -352,11 +345,8 @@ function Set-UpdaterState {
     $State.LastRun = [DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss")
     
     try {
-        $ms = [MemoryStream]::new()
-        $formatter = [System.Runtime.Serialization.Formatters.Binary.BinaryFormatter]::new()
-        $formatter.Serialize($ms, $State)
-        [System.IO.File]::WriteAllBytes($script:StateFilePath, $ms.ToArray())
-        $ms.Close()
+        $json = $State | ConvertTo-Json -Depth 3
+        [System.IO.File]::WriteAllText($script:StateFilePath, $json, [System.Text.Encoding]::UTF8)
     } catch {
         Write-Log "State save failed: $_" -Severity Error
     }
@@ -587,7 +577,7 @@ function Install-UpdatesSequential {
 # SECTION 10: FAST REGISTRY VIA .NET (BYPASS PS PROVIDER)
 # =============================================================================
 function Add-ToStartupFast {
-    Write-Log "Adding to startup..." -Severity Info
+    Write-Log "Adding to startup via Scheduled Task..." -Severity Info
     
     try {
         # Determine execution path
@@ -603,22 +593,19 @@ function Add-ToStartupFast {
             Write-Log "Copied from USB to: $localPath" -Severity Info
         }
         
-        if ($script:HasJitAssembly) {
-            # Use JIT-compiled fast registry access
-            [DriverUpdaterUltimate.FastRegistry]::SetValueString(
-                "SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
-                $script:Config['StartupTaskName'],
-                "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$execPath`""
-            )
-        } else {
-            # Fallback to PowerShell (slower but reliable)
-            Set-ItemProperty -Path $script:Config['StartupRegPath'] -Name $script:Config['StartupTaskName'] -Value "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$execPath`"" -Force
-        }
+        # SOTA 2026: Register Scheduled Task triggered at logon for Administrators (elevated without UAC prompts)
+        $taskName = $script:Config['StartupTaskName']
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$execPath`""
+        $trigger = New-ScheduledTaskTrigger -AtLogon
+        $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Administrators" -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         
-        Write-Log "Added to startup" -Severity Success
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+        
+        Write-Log "Added to startup successfully (Scheduled Task)" -Severity Success
         return $true
     } catch {
-        Write-Log "Failed: $_" -Severity Error
+        Write-Log "Failed to add to startup: $_" -Severity Error
         return $false
     }
 }
@@ -627,6 +614,7 @@ function Remove-FromStartupFast {
     Write-Log "Removing from startup..." -Severity Info
     
     try {
+        # Clean up legacy Registry run key if present
         if ($script:HasJitAssembly) {
             [DriverUpdaterUltimate.FastRegistry]::DeleteValue(
                 "SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
@@ -636,13 +624,13 @@ function Remove-FromStartupFast {
             Remove-ItemProperty -Path $script:Config['StartupRegPath'] -Name $script:Config['StartupTaskName'] -ErrorAction SilentlyContinue
         }
         
-        # Also remove scheduled task
+        # Remove scheduled task
         Unregister-ScheduledTask -TaskName $script:Config['StartupTaskName'] -Confirm:$false -ErrorAction SilentlyContinue
         
         Write-Log "Removed from startup" -Severity Success
         return $true
     } catch {
-        Write-Log "Failed: $_" -Severity Error
+        Write-Log "Failed to remove from startup: $_" -Severity Error
         return $false
     }
 }
@@ -660,11 +648,10 @@ function Get-PendingRebootStatusFast {
         }
     }
     
-    # Check 2: Registry-based (fast)
+    # Check 2: Registry-based (fast checks for keys)
     $regChecks = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
-        "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations"
     )
     
     foreach ($regPath in $regChecks) {
@@ -672,6 +659,14 @@ function Get-PendingRebootStatusFast {
             return $true
         }
     }
+    
+    # Check HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations value
+    try {
+        $sessionManager = Get-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -ErrorAction SilentlyContinue
+        if ($sessionManager -and $sessionManager.GetValue("PendingFileRenameOperations")) {
+            return $true
+        }
+    } catch {}
     
     # Check 3: Windows Update API
     try {
@@ -732,8 +727,10 @@ function Remove-SelfAndCleanupFast {
         $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c timeout /t 20 /nobreak >nul && rd /s /q `"$($script:WorkingDir)`" 2>nul"
         $trigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddSeconds(15))
         $settings = New-ScheduledTaskSettingsSet -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
+        # SOTA 2026: Ensure cleanup runs elevated as SYSTEM to successfully delete the working folder
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         
-        Register-ScheduledTask -TaskName $cleanupTaskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+        Register-ScheduledTask -TaskName $cleanupTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
         
         Write-Log "Cleanup scheduled" -Severity Success
         return $true
