@@ -1,5 +1,4 @@
 # VS Code settings and workspace files
-.vscode/
 *.code-workspace
 
 # PowerShell execution logs
@@ -33,3 +32,5 @@ original_*.ps1
 test_*.ps1
 debug_*.ps1
 temp_*.ps1
+config.bat
+node_modules
